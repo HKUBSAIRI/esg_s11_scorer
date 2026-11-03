@@ -7,6 +7,16 @@
    加新指标（S1.2 / S2 等）时在 ``SPECS`` 里追加一段规格 + 词表即可，编排层不改。
 2. **判分函数名是字符串**（在 ``scoring.py`` 里注册），避免为每个指标写一套 if。
 3. **所有阈值集中在 ``BANDS``**，与《S1.1 指标与判断标准》一一对应，改口径只改这里。
+4. **路径不写在这里**：PDF 目录、输出目录、词表仓库位置都是「本机事实」，由环境变量 /
+   ``.env`` 提供（见 ``settings.py``）。本文件只保留「模型事实」与它们的默认快照。
+
+    想让输入/输出换地方，别改代码：
+
+        $env:ESG_PDF_DIR = "D:/ESG/FY2025"     # 或写进 esg_s11_scorer/.env
+        python -m esg_s11_scorer --show-config # 看现在生效的是什么、从哪来
+
+    下面的 ``REPORT_DIR`` / ``DEFAULT_OUT`` 等常量是**导入时的快照**，为兼容旧脚本而保留；
+    新代码请用 ``settings.get_settings()``（能跟随 ``--env-file`` 变化）。
 
 版本号规则
 ----------
@@ -16,18 +26,35 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
+
+from .settings import get_settings
 
 MODEL_VERSION = "s11-model-1.0"
 EXTRACT_VERSION = "extract-1.0"
 SCHEMA_VERSION = "1"
 
-# 指标标准原文（唯一信源）与要素词表所在仓库（只读复用，不改动该仓库）
-PROJECT_ROOT = Path(__file__).resolve().parents[1].parent
-INSIGHT_APP = PROJECT_ROOT / "50-应用" / "ESG_insight" / "app"
-STANDARD_DOC = PROJECT_ROOT / "50-应用" / "sample" / "02-指标标准" / "S1.1_指标与判断标准.md"
-REPORT_DIR = PROJECT_ROOT / "50-应用" / "good_sample" / "分析指标" / "ESG报告"
-DEFAULT_OUT = PROJECT_ROOT / "50-应用" / "good_sample" / "分析指标" / "打分结果"
+# 管道各阶段的「规则版本」：指纹（缓存复用判据）用它们区分「哪一段变了」。
+# 只增不改：改了某段的实现就必须 +0.1，否则旧产物会被误判为仍有效。
+PARSE_VERSION = "parse-1.0"              # 页级文本的落地格式
+JUDGE_PLUS_VERSION = "judge-plus-1.0"    # 增强层 7 条补丁
+BENCH_VERSION = "bench-1.0"              # 分位算法
+TABLE_VERSION = "tables-1"               # gold 表字段
+
+_SETTINGS = get_settings()
+
+# 路径快照：来源 = settings（环境变量 > .env > 相对本仓库的默认值）
+PROJECT_ROOT = _SETTINGS.project_root
+INSIGHT_APP = _SETTINGS.insight_app              # 指标标准原文与要素词表所在仓库（只读复用）
+STANDARD_DOC = _SETTINGS.standard_doc
+REPORT_DIR = _SETTINGS.report_root               # 报告根目录，其下有 FY2025/、FY2024/
+DEFAULT_OUT = _SETTINGS.out_dir
+BUILD_DIR = _SETTINGS.build_dir                  # 管道中间态（阶段产物 + gold 表）
+DEFAULT_PDF_DIR = _SETTINGS.pdf_dir              # 默认输入（目录或单个 PDF）
+DEFAULT_PRIOR_DIR = _SETTINGS.prior_dir          # 默认上一年目录；None = 自动取同级 FY{year-1}
+DEFAULT_YEAR = _SETTINGS.year
+DEFAULT_BENCH = _SETTINGS.bench_mode
+DEFAULT_BENCH_CSV = _SETTINGS.bench_csv
+DEFAULT_OVERRIDE_CSV = _SETTINGS.override_csv
 
 # ---------------------------------------------------------------- 量表阈值
 # 分位档（A/B 共用）：score = 100 / 75 / 50 / 25 / 0
@@ -100,7 +127,11 @@ def check_consistency() -> list[str]:
 
 __all__ = [
     "MODEL_VERSION", "EXTRACT_VERSION", "SCHEMA_VERSION",
+    "PARSE_VERSION", "JUDGE_PLUS_VERSION", "BENCH_VERSION", "TABLE_VERSION",
     "PROJECT_ROOT", "INSIGHT_APP", "STANDARD_DOC", "REPORT_DIR", "DEFAULT_OUT",
+    "BUILD_DIR",
+    "DEFAULT_PDF_DIR", "DEFAULT_PRIOR_DIR", "DEFAULT_YEAR", "DEFAULT_BENCH",
+    "DEFAULT_BENCH_CSV", "DEFAULT_OVERRIDE_CSV",
     "PERCENTILE_BANDS", "GAP_BANDS", "GAP_IMPROVE_FULL", "GAP_NEAR_ZERO", "MIN_PEER_N",
     "IndicatorSpec", "SPECS", "IND_NAMES", "IND_WEIGHTS", "WEIGHT_SUM", "WEIGHT_NOTE",
     "check_consistency",

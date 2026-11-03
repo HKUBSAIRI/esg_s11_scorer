@@ -43,6 +43,20 @@ class NumFact:
     confidence: str      # 高 / 中 / 低 / 人工
     note: str = ""
 
+    def to_dict(self) -> dict:
+        return {"field": self.field, "value": self.value, "year": self.year,
+                "page": self.page, "method": self.method, "quote": self.quote,
+                "confidence": self.confidence, "note": self.note}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "NumFact":
+        return cls(field=str(d["field"]), value=float(d["value"]),
+                   year=None if d.get("year") is None else int(d["year"]),
+                   page=int(d.get("page") or 0), method=str(d.get("method") or ""),
+                   quote=str(d.get("quote") or ""),
+                   confidence=str(d.get("confidence") or "低"),
+                   note=str(d.get("note") or ""))
+
 
 @dataclass
 class Extraction:
@@ -64,17 +78,40 @@ class Extraction:
         return None if f is None else f.value
 
     def to_dict(self) -> dict:
+        """序列化成阶段产物（``build/FY{year}/{code}/facts.json``）。
+
+        ``best`` 用「facts 下标」存，而不是再抄一份数值：落地文件与内存对象一一对应，
+        否则同一个 NumFact 会存成两份，取值时到底是哪一份就成了新问题。
+        """
+        idx = {id(f): i for i, f in enumerate(self.facts)}
         return {
             "report_year": self.report_year,
             "denom_note": self.denom_note,
-            "warnings": self.warnings,
-            "facts": [
-                {"field": f.field, "year": f.year, "value": f.value, "page": f.page,
-                 "method": f.method, "confidence": f.confidence,
-                 "note": f.note, "quote": f.quote}
-                for f in self.facts
-            ],
+            "warnings": list(self.warnings),
+            "facts": [f.to_dict() for f in self.facts],
+            "best": {fld: {str(y): idx[id(f)] for y, f in m.items()}
+                     for fld, m in self.best.items()},
         }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Extraction":
+        facts = [NumFact.from_dict(x) for x in d.get("facts") or []]
+        best: dict[str, dict[int, NumFact]] = {}
+        for fld, m in (d.get("best") or {}).items():
+            try:
+                best[fld] = {int(y): facts[i] for y, i in m.items() if 0 <= i < len(facts)}
+            except (AttributeError, TypeError, ValueError):
+                continue
+        ex = cls(report_year=int(d.get("report_year") or 0),
+                 facts=facts,
+                 denom_note=str(d.get("denom_note") or ""),
+                 warnings=list(d.get("warnings") or []),
+                 best=best)
+        if not ex.best:                     # 老产物没存 best：按 facts 兜出来
+            for f in facts:
+                if f.year is not None:
+                    ex.best.setdefault(f.field, {}).setdefault(f.year, f)
+        return ex
 
 
 # ---------------------------------------------------------------- 判定补丁
@@ -86,6 +123,75 @@ class Patch:
     before: str
     after: str
     reason: str
+
+    def to_dict(self) -> dict:
+        return {"eid": self.eid, "name": self.name, "before": self.before,
+                "after": self.after, "reason": self.reason}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Patch":
+        return cls(eid=str(d.get("eid") or ""), name=str(d.get("name") or ""),
+                   before=str(d.get("before") or ""), after=str(d.get("after") or ""),
+                   reason=str(d.get("reason") or ""))
+
+
+# ---------------------------------------------------------------- 要素判定
+def render_quote(page: int, sent: str, suspect: bool = False) -> str:
+    """证据句的展示格式（唯一实现）。
+
+    改造前这段在 ``ElementResult.top_quote()`` 里，属于 ESG_insight 仓库；落地成产物后
+    证据句必须能独立存活（不能依赖上游对象），所以在这里固定下来。两边格式必须一致，
+    否则「内存跑出的报告」和「读表跑出的报告」会给出不同的证据串。
+    """
+    text = sent if len(sent) <= 220 else sent[:220] + "…"
+    return f"[p{page}] {text}{'（证据可疑）' if suspect else ''}"
+
+
+@dataclass
+class ElementJudgement:
+    """一个 29 要素判定的可落地形态（``s11_judge.ElementResult`` 的稳定快照）。
+
+    为什么转成自有类型
+    ------------------
+    下游（打分层、报告层、表）只要 ``verdict`` / ``name`` / ``reason`` / 证据句，不需要
+    ``hits`` 这种上游内部结构。转完之后产物里存的是**已渲染好的证据串**，重建时不再
+    import ``s11_judge``——判定层换了实现，历史产物依然读得出来。
+    """
+    eid: str
+    ind: str
+    name: str
+    verdict: str
+    reason: str = ""
+    confidence: float = 0.0
+    quotes: list[str] = field(default_factory=list)
+    doubt: bool = False              # 全部证据句都没有人员词 → 证据可疑（只提示，不影响判定）
+
+    def top_quote(self, n: int = 1) -> str:
+        return self.quotes[n - 1] if len(self.quotes) >= n else ""
+
+    def to_dict(self) -> dict:
+        return {"eid": self.eid, "ind": self.ind, "name": self.name,
+                "verdict": self.verdict, "reason": self.reason,
+                "confidence": self.confidence, "quotes": list(self.quotes),
+                "doubt": self.doubt}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ElementJudgement":
+        return cls(eid=str(d.get("eid") or ""), ind=str(d.get("ind") or ""),
+                   name=str(d.get("name") or ""), verdict=str(d.get("verdict") or "否"),
+                   reason=str(d.get("reason") or ""),
+                   confidence=float(d.get("confidence") or 0.0),
+                   quotes=[str(q) for q in (d.get("quotes") or [])],
+                   doubt=bool(d.get("doubt")))
+
+    @classmethod
+    def from_result(cls, r) -> "ElementJudgement":
+        """从 ``s11_judge.ElementResult`` 转换（唯一接触上游类型的入口）。"""
+        return cls(eid=r.eid, ind=getattr(r, "ind", ""), name=r.name,
+                   verdict=r.verdict, reason=r.reason,
+                   confidence=float(getattr(r, "confidence", 0.0) or 0.0),
+                   quotes=[render_quote(h.page, h.sent, h.suspect) for h in r.hits],
+                   doubt=bool(getattr(r, "doubt", False)))
 
 
 # ---------------------------------------------------------------- 打分
@@ -260,8 +366,9 @@ class CompanyRun:
     pdf: Path
     doc: "Doc | None" = None
     ex: Extraction | None = None
-    res: dict[str, "ElementResult"] = field(default_factory=dict)
+    res: dict[str, "ElementJudgement"] = field(default_factory=dict)
     patches: list[Patch] = field(default_factory=list)
+    has_voluntary: bool = False          # 是否披露自愿离职口径（判定阶段产出，打分要用）
     card: ScoreCard | None = None
     status: str = "ok"
     error: str = ""
@@ -283,3 +390,51 @@ class CompanyRun:
         if v is None:
             v = self.ex.value("gender_gap_avg", report_year - 1)
         return v if v is not None else self.prior_gap_fallback
+
+
+# ---------------------------------------------------------------- 已发布视图
+@dataclass
+class CompanyView:
+    """一家公司的**只读视图**：全部字段来自已发布的表，报告层只认它。
+
+    与 ``CompanyRun`` 的区别在于「谁能改」：``CompanyRun`` 是编排过程中的可变中间态
+    （会话里挂着 Doc、阶段结果、状态位）；``CompanyView`` 建出来之后只有读操作，
+    报告层拿不到任何改写入口——这就是「报告只渲染、不计算」的落地方式。
+    """
+    code: str
+    name: str
+    file: str
+    card: ScoreCard
+    facts: list[NumFact] = field(default_factory=list)
+    elements: dict[str, ElementJudgement] = field(default_factory=dict)
+    patches: list[Patch] = field(default_factory=list)
+    pct_a: float | None = None          # 流失率分位（低者优）
+    pct_b: float | None = None          # 改善率分位（高者优）
+    band_a: int | None = None
+    band_b: int | None = None
+
+
+@dataclass
+class Failure:
+    """一份没能出分的输入（解析失败/无数据），台账里要写明原因，不能静默消失。"""
+    code: str
+    file: str
+    status: str
+    error: str = ""
+
+
+@dataclass
+class Batch:
+    """一个年度批次的已发布结果：报告层的唯一输入。"""
+    year: int
+    views: list[CompanyView] = field(default_factory=list)
+    failures: list[Failure] = field(default_factory=list)
+    bench_kind: str = "none"
+    bench_note: str = ""
+    bench_n: int = 0
+    bench_snapshot: str = ""
+    model_version: str = ""
+
+    @property
+    def total(self) -> int:
+        return len(self.views) + len(self.failures)

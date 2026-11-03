@@ -2,5 +2,13 @@
 pypdf>=6.0          # 6.9.2 实测
 openpyxl>=3.1       # 3.1.5 实测
 
+# 可选：装了就写 parquet（带列类型，可被 DuckDB / pandas 直读）；
+# 不装则 gold 表自动落 JSONL —— 行与列完全一致，只是没有类型与压缩。
+# pyarrow>=14       # 24.0.0 实测
+
 # 说明：另需同级目录 50-应用/ESG_insight/app 提供 s11_text / s11_judge / s11_elements
-# （不通过 pip 安装，由 esg_s11_scorer/__init__.py 注入 sys.path）
+# （不通过 pip 安装，位置由环境变量 ESG_INSIGHT_APP 或默认相对路径决定，
+#   见 settings.py / __init__.py 的 sys.path 注入）
+
+# 配置（.env / 环境变量）**不需要** python-dotenv：settings.py 自带几十行的 KEY=VALUE 解析，
+# 少一个依赖，也少一种「装了没装行为不一样」的可能。

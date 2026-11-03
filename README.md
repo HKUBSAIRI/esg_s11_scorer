@@ -4,8 +4,9 @@
 > 纯规则、确定性、可复现：同一份 PDF 任何时候跑都是同一个分数，不调用任何模型 API。
 
 ```powershell
-cd 50-应用
-python -m esg_s11_scorer --pdf "good_sample/分析指标/ESG报告/FY2025" --year 2025
+cd 50-应用\esg_s11_scorer
+python -m esg_s11_scorer --show-config   # 先看输入/输出现在指向哪、来自哪个变量
+python -m esg_s11_scorer                 # 路径写在 .env 里，命令就这么短
 ```
 
 输出（默认落 `50-应用/good_sample/分析指标/打分结果/`）：
@@ -18,6 +19,52 @@ python -m esg_s11_scorer --pdf "good_sample/分析指标/ESG报告/FY2025" --yea
 ├── S1.1_批次汇总_2025.xlsx           # 汇总 / 对标分位 / 要素矩阵 / 缺口清单 / 运行台账
 └── overrides_FY2025.csv              # 人工兜底值（可选）
 ```
+
+---
+
+## 〇、配置：路径写在 `.env`，不写在代码里
+
+原因不只是「好看」：这套模型的卖点是**可复现**。路径一旦硬编码进 `config.py`，
+「换一批 PDF」和「改判分规则」就会混在同一次提交里——分数变了，说不清是数据变了还是模型变了。
+所以两类事实分开存：
+
+| 类别 | 放哪 | 改动的影响 |
+|---|---|---|
+| **本机事实**：PDF 在哪、输出到哪、哪一年 | 环境变量 / `.env`（`settings.py`） | 只换输入输出，分数不变 |
+| **模型事实**：权重、阈值、判分规则 | `config.py` 的 `SPECS` / `BANDS` | 必须 +0.1 版本号并重跑校准 |
+
+```powershell
+cd 50-应用\esg_s11_scorer
+python -m esg_s11_scorer --init-env      # 由 .env.example 生成 .env（已存在则不覆盖）
+python -m esg_s11_scorer --show-config   # 每个变量的生效值 / 来源 / 路径是否存在
+```
+
+`.env` 已按本仓库现状写好（5 家 FY2025 → `打分结果/`），所以日常只需要 `python -m esg_s11_scorer`。
+优先级：**命令行参数 > 系统环境变量 > `.env` > 默认值**。
+
+| 变量 | 作用 | 默认 |
+|---|---|---|
+| `ESG_YEAR` | 报告年度 | 2025 |
+| `ESG_PDF_DIR` | 输入：某个年份目录，或单份 PDF 的完整路径 | `{ESG_REPORT_ROOT}/FY{ESG_YEAR}` |
+| `ESG_PRIOR_DIR` | 上一年报告目录（取上期流失率/上期薪酬差距） | 自动取 PDF 同级 `FY{year-1}` |
+| `ESG_OUT_DIR` | 输出目录 | `good_sample/分析指标/打分结果` |
+| `ESG_REPORT_ROOT` | 报告根目录（其下有 `FY2025/`、`FY2024/`） | `good_sample/分析指标/ESG报告` |
+| `ESG_BENCH` / `ESG_BENCH_CSV` | 对标来源与外部对标表 | `auto` / 无 |
+| `ESG_OVERRIDE_CSV` | 人工兜底值表 | 无 |
+| `ESG_INSIGHT_APP` / `ESG_STANDARD_DOC` | 只读依赖：要素词表仓库、标准原文 | 同级仓库路径 |
+| `ESG_PROJECT_ROOT` | 项目根；**相对路径都按它解析** | 本包的上两级目录 |
+| `ESG_SAMPLE_PDF_DIR` / `ESG_VERDICTS` | 校准集（`calibrate.py`） | `sample/01-源PDF` 等 |
+
+临时换一批，不必动 `.env`：
+
+```powershell
+python -m esg_s11_scorer --pdf "D:/另一批/FY2025" --year 2026 --out "D:/结果"   # 只本次
+$env:ESG_PDF_DIR = "D:/另一批/FY2025"; python -m esg_s11_scorer                # 本窗口内
+python -m esg_s11_scorer --env-file .env.2026                                  # 换整套配置
+```
+
+`.env` 不进版本库（`.gitignore` 已排除），模板 [`.env.example`](.env.example) 是唯一信源，
+`tests/test_settings.py` 会断言「模板里没漏任何变量」。配错的路径由 `--show-config` 直接点名。
 
 ---
 
@@ -38,26 +85,39 @@ A/B 由 N/A 变为 75/75）。
 
 ---
 
-## 二、五层架构
+## 二、架构：七段管道，每段产物落地
 
 ```
-PDF ──① 解析── 页级文本（复用 ESG_insight/app/s11_text）
-        │
-        ├─② 数值抽取── 表头年份对齐 → 流失率/上期/性别薪酬差距/离职人数/员工数/集体谈判覆盖率
-        │             （extract.py：本模型新增，解决「% 10 11 11 10」这类多年份表）
-        │
-        ├─③ 要素判定── 29 要素词法判定（复用 s11_judge）+ 7 条增强补丁（judge_plus.py）
-        │
-        ├─④ 对标分位── 批内分位 / 外接 CSV / 关闭（bench.py）
-        │
-        ├─⑤ 打分───── 0.4A+0.3B+0.3C 与三档制（scoring.py，纯算术，无模型）
-        │
-        └─⑥ 报告───── 每家工作簿 + 批次汇总（report.py）
+PDF ──① parse ── 页级文本（复用 ESG_insight/app/s11_text）
+        │                 ↓ build/FY{year}/{code}/parse.json
+        ├─② facts ── 数值抽取（表头年份对齐）+ 人工兜底
+        │                 ↓ facts.json  ← 流失率/上期/薪酬差距/离职人数/员工数/集体谈判
+        ├─③ elements ── 29 要素词法判定 + 7 条增强补丁
+        │                 ↓ elements.json
+        ├─④ prior ── 上期值三级回退（读**上一年已落地的 facts**，不再解析 FY-1 的 PDF）
+        │                 ↓ prior.json
+        ├─⑤ bench ── 对标分位（批内 / 外接 CSV / 关闭）        ← 全批屏障，单份算不了
+        │                 ↓ 快照 id
+        ├─⑥ score ── 0.4A+0.3B+0.3C 与三档制（纯算术，无模型）
+        │                 ↓ score.json
+        └─⑦ report ── 先 publish 成 gold 表，再由表渲染 xlsx
 ```
+
+**每段都能单独重跑**，判据是产物里的指纹（见第七节）：改阈值只重算 score，改抽取正则
+只重算 facts 之后，换一份 PDF 才回到 parse。首次跑 5 家约 1 分钟，第二次同一批约 2 秒。
+
+**报告只渲染、不计算**：分数、分位、档位在 `score` 阶段就写进 gold 表，`report.py`
+拿到的是只读视图。于是「表里的数」和「报告里的数」不可能各说一套。
 
 **复用而非重写**：解析与 29 要素词表来自 `50-应用/ESG_insight/app`（只读引用，不改该仓库），
-本包只新增「数值抽取、对标分位、打分编排、报告」。好处是词表只维护一处；
-代价是本包依赖该目录存在（`config.INSIGHT_APP` 里改路径即可解耦）。
+本包只新增「数值抽取、对标分位、打分编排、产物落地、报告」。好处是词表只维护一处；
+代价是本包依赖该目录存在——换了位置就设 `ESG_INSIGHT_APP`（见第〇节），不用改代码。
+
+```powershell
+python -m esg_s11_scorer --dry-run        # 只算分不写报告（中间产物照常落地）
+python -m esg_s11_scorer --force          # 忽略已有产物，全段重算
+python -m esg_s11_scorer --build-dir D:\cache\esg   # 换一个中间态目录
+```
 
 ---
 
@@ -103,8 +163,10 @@ PDF ──① 解析── 页级文本（复用 ESG_insight/app/s11_text）
 ```powershell
 cd 50-应用
 python esg_s11_scorer/calibrate.py                        # 产出 reports/calibration.md / .json
-python -m unittest discover -s esg_s11_scorer/tests -t .  # 27 条回归测试（约 4 分钟）
+python -m unittest discover -s esg_s11_scorer/tests -t .  # 80 条回归测试（约 2.5 分钟）
 ```
+
+校准集路径同样走配置（`ESG_SAMPLE_PDF_DIR`、`ESG_VERDICTS`），样本换了不用改脚本。
 
 | 校准集 | 要素一致率 | 指标分（偏差≤5 分） |
 |---|---|---|
@@ -119,7 +181,7 @@ python -m unittest discover -s esg_s11_scorer/tests -t .  # 27 条回归测试�
   （原始 10 样本工作簿对该项也是硬编码名单）。模型用明规则替代，长篇报告准确，
   极短章节偏宽松——这是本模型最弱的一项，已在报告里标注。
 
-**回归测试锁什么**（`tests/`，27 条）：
+**回归测试锁什么**（`tests/`，80 条）：
 
 | 文件 | 锁定的内容 |
 |---|---|
@@ -127,7 +189,10 @@ python -m unittest discover -s esg_s11_scorer/tests -t .  # 27 条回归测试�
 | `test_extract.py` | 5 家的流失率/上期/差距绝对值；药明四列年份对齐；改善率算子 |
 | `test_pipeline.py` | 批跑成功、`ScoreData` 类型、上期三级回退（含 0.0 不得当缺失）、分位样本量 |
 | `test_judge.py` | 7 条补丁各自生效；增强层不得就地改上游判定对象 |
-| `test_report.py` | 工作簿可写出、单元格是真数值、三档制「档位」行存在、分位值正确 |
+| `test_report.py` | 工作簿可写出、单元格是真数值、三档制「档位」行存在、分位值正确；报告里的每一家都能在 gold 表查到 |
+| `test_settings.py` | `.env` 解析（引号/注释/反斜杠/BOM）、优先级、相对路径、坏值回退、模板不漏变量 |
+| `test_store.py` | 产物增删读、损坏即报错、表列类型往返（bool/float/None/中文）、整表覆盖写幂等 |
+| `test_stages.py` | 序列化不丢字段（含 `best` 指回人工值）、三级回退与出处、**缓存只在该重算时重算**、表里的分==卡里的分 |
 
 ---
 
@@ -149,27 +214,107 @@ python -m unittest discover -s esg_s11_scorer/tests -t .  # 27 条回归测试�
 esg_s11_scorer/               ← 独立 git 仓库（2026-11-03 初始化）
 ├── pyproject.toml            依赖与包元数据（pypdf / openpyxl）
 ├── requirements.txt
+├── settings.py   ★本机配置    .env / 环境变量 → 生效路径（带来源追踪，可 --show-config）
+├── .env.example              配置模板（入库）；.env 由 --init-env 生成，不入库
 ├── models.py     ★领域模型    CompanyRun / NumFact / Extraction / Component / IndScore / ScoreCard / ScoreData / Patch / PeerRow
+│                              + 可落地的 ElementJudgement / 只读的 CompanyView / Batch
 ├── metrics.py    ★口径算子    改善率唯一实现（含 fmt_pct）
 ├── config.py                 版本号、阈值、指标规格（数据化）+ 与 s11_elements 的一致性校验
 ├── extract.py                数值抽取：表头年份对齐、句式兜底、置信度、交叉校验
 ├── judge_plus.py             29 要素判定增强：7 条补丁
 ├── bench.py                  批内分位 / 外接对标表 / 导出对标库
 ├── scoring.py                五项指标算分（N/A、可达上限、归一）+ build_card 装配
-├── pipeline.py               编排：两遍批处理、上期三级回退、人工兜底
-├── report.py                 每家工作簿 + 批次汇总
-├── cli.py / __main__.py      命令行
+├── stages.py     ★阶段计算    六段各自的纯函数：parse/facts/elements/prior/score（不碰文件）
+├── store.py      ★落地层      阶段产物 JSON + gold 表（parquet/JSONL）+ 指纹
+├── tables.py     ★表契约      facts/elements/indicators/components/companies/bench_* 的字段与装配
+├── pipeline.py   ★编排层      七段 DAG、缓存复用、跨年读表、发布
+├── report.py                 每家工作簿 + 批次汇总（只读表，不计算）
+├── cli.py / __main__.py      命令行（--show-config / --init-env / --env-file / --force / --dry-run）
 ├── calibrate.py              回测与校准（→ reports/）
-├── tests/                    27 条 unittest（见第四节）
+├── tests/                    80 条 unittest（见第四节）
+├── build/                    管道中间态（.gitignore，可随时删掉重算）
 └── reports/                  校准产物（.gitignore，可随时重生成）
 ```
 
-依赖方向（无环）：`models ← extract / judge_plus / bench / scoring / pipeline / report`。
-`models` 不 import 本包任何模块；外部类型 `Doc` / `ElementResult` 只在 `TYPE_CHECKING` 下引入。
+依赖方向（无环）：
+
+```
+settings → config → { extract, judge_plus, bench, scoring } → models
+                                ↓
+                     stages → pipeline → { tables, store } → report
+```
+
+`models` 不 import 本包任何模块；`store` 只依赖标准库；`stages` 不碰文件；
+`tables` 只认 `store` + `models`；`report` 只认 `models`（不 import pipeline，也不 import bench）。
+外部类型 `Doc` / `ElementResult` 只出现在 `stages` 与 `TYPE_CHECKING` 里——
+下游读产物时不再需要 `s11_judge`，历史数据不会被上游实现变更绑死。
 
 ---
 
-## 七、已知限制
+## 七、管道：产物、指纹、怎么查数
+
+### 1. `build/` 里有什么
+
+```
+build/
+├── FY2025/                      ← 分区键 = (year, code)
+│   ├── _meta.json               ← 本年批次：模型版本、对标快照、家数
+│   ├── 02269/
+│   │   ├── parse.json           ← 页级文本（最贵的一步，全生命周期只算一次）
+│   │   ├── facts.json           ← 抽到的数值 + 人工兜底（含 best 择优结果）
+│   │   ├── elements.json        ← 29 要素判定 + 生效补丁 + 自愿离职口径
+│   │   ├── prior.json           ← 上期值从哪来（本报告附录 / 上一年报告 / 人工）
+│   │   └── score.json           ← 记分卡（公司行 + 指标行 + 分项行）
+│   └── ...
+├── FY2024/                      ← 只会有 parse/facts：上一年只需被读，不需出分
+└── tables/FY2025/               ← gold 表（parquet；没装 pyarrow 时自动落 JSONL）
+    ├── facts / elements / patches       证据层：一行一个数值/判定/补丁
+    ├── indicators / components / companies   结果层：分项与总分（含口径与快照 id）
+    └── bench_rows / bench_meta          口径层：这一年拿谁比的、n 是多少
+```
+
+每个产物都是带信封的 JSON：`{"stage","code","year","key","producer","produced_at","payload"}`。
+信封把「能不能复用」和「产出内容」分开——查指纹不用解析 payload。
+
+### 2. 指纹：为什么不重算，或为什么必须重算
+
+| 阶段 | key 由什么决定 | 什么变了会触发重算 |
+|---|---|---|
+| parse | PDF 字节 + `PARSE_VERSION` + 解析源码 | 换了 PDF、改了 `s11_text`/`stages` |
+| facts | parse 的 key + `EXTRACT_VERSION` + 抽取源码 + override 表内容 | 改了正则、改了人工兜底表 |
+| elements | parse 的 key + `RULESET_VERSION` + `JUDGE_VERSION` + 增强层源码 | 词表/判定/补丁改了 |
+| score | facts+elements+prior 的 key + 对标快照 + `MODEL_VERSION` + 打分源码 | 改阈值、改权重、对标池变了 |
+
+**源码指纹是自动的**（`store.source_digest`）：改了 `extract.py` 就一定会重算 facts，
+不需要谁记得升版本号。手写的 `*_VERSION` 只表达「格式/口径变了」这层人读意义。
+→ 所以「跑了 2 秒」不代表「没生效」，而是「这次真的没有东西需要改」。
+
+### 3. 查数：不用打开 Excel
+
+```python
+import pandas as pd
+base = "esg_s11_scorer/build/tables/FY2025"
+
+cos = pd.read_parquet(f"{base}/companies.parquet")     # 一家一行：总分、分位、上期值出处
+ind = pd.read_parquet(f"{base}/indicators.parquet")    # 一家一指标一行：严格/归一/可达上限/档位
+ind.pivot(index="code", columns="ind", values="strict")   # 就是报告里那张分数表
+
+els = pd.read_parquet(f"{base}/elements.parquet")      # 29 要素 × N 家，带证据句
+els.query("ind == 'S1.1.1' and verdict == '否'")[["code", "eid", "reason"]]
+```
+
+### 4. 对标快照：批内分位让分数「不独立」
+
+A/B 是相对量，**加进第 6 家公司会改变前 5 家的 A/B 分**。这不是 bug，是批内分位的定义。
+改造后这件事是**可见**的：`bench_meta.snapshot` + `companies.bench_snapshot` 记下当次
+用了哪个池子，快照一变，全部 score 就重算并在台账里写出新 id。
+
+要「补一家不影响老分数」，就得先定死池子：把当次 `bench_rows.parquet` 导出成行业库，
+之后一律用 `--bench csv` 跑（见第五节 `bench.export_rows()`）。这是口径决策，不是代码决策。
+
+---
+
+## 八、已知限制
 
 1. **只覆盖 S1.1**。其他议题（S1.2 职业健康、S2 供应链、E 系列）尚无指标标准文档，
    架构已预留（见第五节），但没有标准就不能凭空造判据。
@@ -179,3 +324,7 @@ esg_s11_scorer/               ← 独立 git 仓库（2026-11-03 初始化）
 4. **权重缺 15%**。标准原文五项权重 25+30+10+5+15=85，其余 15% 未定义；
    总分同时给「严格（85 分制）」与「归一（百分制）」两个数，不替标准补权重。
 5. **S1.1.5 偏宽松**（见第四节）。
+6. **pyarrow 可选**。装了写 parquet（带列类型、可被 DuckDB/pandas 直读），没装自动落
+   JSONL（同样的行与列，只是没有类型与压缩）。两者 schema 一致，代码不用改。
+7. **产物会随代码失效**。这是设计而不是缺陷：改了源码，旧 `build/` 就不再被复用。
+   想省时间可以接受它重算一遍，想确定「跑的是当前代码」就加 `--force` 清空重来。

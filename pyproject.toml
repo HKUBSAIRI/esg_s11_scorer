@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "esg-s11-scorer"
-version = "1.0.0"
+version = "1.2.0"
 description = "S1.1 五项指标打分模型：读 ESG 报告 PDF → 数值抽取 + 29 要素判定 → 打分 → 可解释报告"
 requires-python = ">=3.11"
 dependencies = [
@@ -13,10 +13,14 @@ dependencies = [
 ]
 readme = "README.md"
 
+# 可选：gold 表默认写 parquet；装不上时自动退回 JSONL（schema 一致）
+[project.optional-dependencies]
+tables = ["pyarrow>=14"]
+
 # 说明：本包**不独立发布**，运行时还需要同级仓库 50-应用/ESG_insight/app
-# （复用其 s11_text / s11_judge / s11_elements）。路径见 config.INSIGHT_APP。
+# （复用其 s11_text / s11_judge / s11_elements）。路径由 settings.ESG_INSIGHT_APP 决定。
 [tool.setuptools]
 packages = ["esg_s11_scorer"]
 
 [tool.setuptools.package-data]
-esg_s11_scorer = ["README.md"]
+esg_s11_scorer = ["README.md", ".env.example"]

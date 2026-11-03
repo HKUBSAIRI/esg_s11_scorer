@@ -21,12 +21,15 @@ sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import esg_s11_scorer  # noqa: F401
-from esg_s11_scorer.config import PROJECT_ROOT, REPORT_DIR
-from esg_s11_scorer.pipeline import run_extract_judge, run_score
 from esg_s11_scorer.bench import Bench
+from esg_s11_scorer.pipeline import run_extract_judge, run_score
+from esg_s11_scorer.settings import get_settings
 
-SAMPLE_DIR = PROJECT_ROOT / "50-应用" / "sample" / "01-源PDF"
-VERDICTS = PROJECT_ROOT / "50-应用" / "sample" / "04-脚本与索引" / "verdicts.py"
+# 校准集路径同样走配置（ESG_SAMPLE_PDF_DIR / ESG_VERDICTS / ESG_PDF_DIR），不写死
+_SETTINGS = get_settings()
+SAMPLE_DIR = _SETTINGS.sample_pdf_dir
+VERDICTS = _SETTINGS.verdicts
+REPORT_DIR = _SETTINGS.report_root
 CIRCLED = "①②③④⑤⑥⑦⑧⑨"
 
 # 专家分（sample/README.md 第三节，按 2026-10-22 修订版）

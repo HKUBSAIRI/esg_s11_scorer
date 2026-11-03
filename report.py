@@ -3,6 +3,9 @@
 
 设计取向
 --------
+- **只渲染，不计算**：本模块的输入是已发布的 ``Batch``（来自 gold 表），不是编排过程中的
+  中间态。分数、分位、档位在进本模块之前就已经定稿，这里只负责摆到格子里——
+  于是「报告里的数」与「表里的数」不可能不一致。
 - **一格都能反查**：分数旁边永远有分项说明与证据页码；数据表带抽取方式与置信度。
 - **N/A 与 0 分开写**：分项不可评显示「N/A」，不显示 0。
 - 不画图表、不用公式：任何一格的数值都能由「数据」「要素」两表手算复现。
@@ -18,7 +21,7 @@ from openpyxl.utils import get_column_letter
 
 from .config import (EXTRACT_VERSION, MODEL_VERSION, SCHEMA_VERSION,
                      WEIGHT_NOTE, WEIGHT_SUM)
-from .models import CompanyRun
+from .models import Batch, CompanyView
 
 XL_HEAD, XL_TITLE = "FF4472C4", "FF2F5597"
 XL_LIGHT, XL_BD = "FFD9E2F3", "FFBFBFBF"
@@ -67,13 +70,14 @@ def _fmt(v) -> object:
 
 
 # ---------------------------------------------------------------- 单家公司
-def write_company(run: CompanyRun, out_dir: Path) -> Path:
-    card = run.card
+def write_company(view: CompanyView, out_dir: Path) -> Path:
+    """一家公司的五个工作表。``view`` 来自 gold 表，本函数不重算任何分数。"""
+    card = view.card
     data = card.data
     wb = Workbook()
     ws = wb.active
     ws.title = "总览"
-    _title(ws, f"{run.code} {run.name} · S1.1 五项指标打分（报告年度 {card.report_year}）", 8)
+    _title(ws, f"{view.code} {view.name} · S1.1 五项指标打分（报告年度 {card.report_year}）", 8)
     _head(ws, 2, ["指标", "名称", "权重", "得分（严格/N/A 计 0）", "得分（归一/百分制）",
                   "可达上限", "档位", "主要缺口"], [9, 22, 8, 15, 15, 10, 10, 62])
     r = 3
@@ -142,7 +146,7 @@ def write_company(run: CompanyRun, out_dir: Path) -> Path:
     _title(ws3, "抽取到的数值（含页码、抽取方式、置信度）", 6)
     _head(ws3, 2, ["字段", "年份", "数值", "页码", "抽取方式", "置信度"], [26, 8, 12, 8, 18, 10], h=26)
     r = 3
-    for f in sorted(run.ex.facts, key=lambda x: (x.field, -(x.year or 0))):
+    for f in sorted(view.facts, key=lambda x: (x.field, -(x.year or 0))):
         for j, v in enumerate([f.field, f.year, f.value, f.page or "—", f.method, f.confidence], start=1):
             c = ws3.cell(row=r, column=j, value=v)
             c.border, c.font = BORDER, F_B
@@ -158,10 +162,10 @@ def write_company(run: CompanyRun, out_dir: Path) -> Path:
     _title(ws4, "29 个核查要素判定（含增强层补丁）", 5)
     _head(ws4, 2, ["要素", "名称", "判定", "判定理由", "首条证据（页码 + 原文）"],
           [11, 24, 8, 44, 74], h=28)
-    patched = {p.eid: p for p in run.patches}
+    patched = {p.eid: p for p in view.patches}
     r = 3
-    for eid in sorted(run.res, key=lambda e: (e.split("-")[0], int(e.split("-")[1]))):
-        res = run.res[eid]
+    for eid in sorted(view.elements, key=lambda e: (e.split("-")[0], int(e.split("-")[1]))):
+        res = view.elements[eid]
         reason = res.reason + (f"｜补丁：{patched[eid].reason}" if eid in patched else "")
         for j, v in enumerate([eid, res.name, res.verdict, reason, res.top_quote()], start=1):
             c = ws4.cell(row=r, column=j, value=v)
@@ -183,13 +187,13 @@ def write_company(run: CompanyRun, out_dir: Path) -> Path:
     meta = [
         ("模型版本", MODEL_VERSION), ("抽取版本", EXTRACT_VERSION),
         ("导出字段版本", SCHEMA_VERSION),
-        ("文件", run.pdf.name), ("报告年度", card.report_year),
+        ("文件", view.file), ("报告年度", card.report_year),
         ("对标池", data.bench_note if data else ""),
         ("上期值来源", data.prior_source if data else ""),
         ("离职率分母口径", (data.turnover_denom_note if data else "") or "未识别到公式说明"),
         ("权重口径", WEIGHT_NOTE),
         ("提示", "\n".join(card.warnings) or "无"),
-        ("增强层补丁", "\n".join(f"{p.eid} {p.before}→{p.after}：{p.reason}" for p in run.patches) or "无"),
+        ("增强层补丁", "\n".join(f"{p.eid} {p.before}→{p.after}：{p.reason}" for p in view.patches) or "无"),
     ]
     r = 3
     for k, v in meta:
@@ -201,19 +205,21 @@ def write_company(run: CompanyRun, out_dir: Path) -> Path:
         r += 1
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / f"S1.1_{run.code}_打分报告.xlsx"
-    wb.properties.title = f"{run.code} S1.1 打分报告"
+    path = out_dir / f"S1.1_{view.code}_打分报告.xlsx"
+    wb.properties.title = f"{view.code} S1.1 打分报告"
     wb.save(path)
     return path
 
 
 # ---------------------------------------------------------------- 批次汇总
-def write_batch(runs: list[CompanyRun], bench, out_dir: Path, year: int) -> Path:
-    ok = [r for r in runs if r.card]
+def write_batch(batch: Batch, out_dir: Path) -> Path:
+    """批次汇总。所有数值来自 gold 表，本函数不调用任何算分/分位函数。"""
+    ok = batch.views
+    year = batch.year
     wb = Workbook()
     ws = wb.active
     ws.title = "汇总"
-    _title(ws, f"S1.1 打分模型 · 批次汇总（{year}，n={len(ok)}，对标={bench.kind}）", 10)
+    _title(ws, f"S1.1 打分模型 · 批次汇总（{year}，n={len(ok)}，对标={batch.bench_kind}）", 10)
     _head(ws, 2, ["代码", "公司", "报告年度", "S1.1.1", "S1.1.2", "S1.1.3", "S1.1.4", "S1.1.5",
                   "加权总分（严格）", "加权总分（归一）"],
           [9, 24, 10, 10, 10, 10, 10, 10, 15, 15])
@@ -235,7 +241,7 @@ def write_batch(runs: list[CompanyRun], bench, out_dir: Path, year: int) -> Path
                 operator="between", formula=[str(lo), str(hi)],
                 fill=PatternFill("solid", bgColor=bg),
                 font=Font(name="微软雅黑", size=11, bold=True, color=fg)))
-    _note(ws, r + 1, 10, f"对标：{bench.note}。总分按权重 25/30/10/5/15（合计 {WEIGHT_SUM}%）"
+    _note(ws, r + 1, 10, f"对标：{batch.bench_note}。总分按权重 25/30/10/5/15（合计 {WEIGHT_SUM}%）"
                          + ("" if WEIGHT_SUM == 100 else "加权，标准原文缺 15%，百分制总分仅供参考"))
     ws.freeze_panes = "C3"
 
@@ -248,11 +254,11 @@ def write_batch(runs: list[CompanyRun], bench, out_dir: Path, year: int) -> Path
     for run in sorted(ok, key=lambda x: (x.card.data.turnover is None,
                                         x.card.data.turnover or 0)):
         d = run.card.data
-        pa = bench.percentile(run.code, "turnover", higher_better=False)
-        pb = bench.percentile(run.code, "improvement", higher_better=True)
+        # 分位/档位在打分阶段就落进了 gold 表，这里只摆值（不再回头问对标池）
+        pa, pb = run.pct_a, run.pct_b
         vals = [run.code, run.name, d.turnover, d.prior_turnover, d.improvement, pa, pb,
-                f"{bench.band(pa) if pa is not None else 'N/A'} / "
-                f"{bench.band(pb) if pb is not None else 'N/A'}"]
+                f"{run.band_a if run.band_a is not None else 'N/A'} / "
+                f"{run.band_b if run.band_b is not None else 'N/A'}"]
         for j, v in enumerate(vals, start=1):
             c = ws2.cell(row=r, column=j, value=v)
             c.border, c.font = BORDER, F_B
@@ -269,13 +275,14 @@ def write_batch(runs: list[CompanyRun], bench, out_dir: Path, year: int) -> Path
 
     # 要素矩阵
     ws3 = wb.create_sheet("要素矩阵")
-    eids = sorted({e for r0 in ok for e in r0.res}, key=lambda e: (e.split("-")[0], int(e.split("-")[1])))
+    eids = sorted({e for r0 in ok for e in r0.elements},
+                  key=lambda e: (e.split("-")[0], int(e.split("-")[1])))
     _title(ws3, f"29 要素 × {len(ok)} 家（是/部分/否）", len(ok) + 3)
     _head(ws3, 2, ["要素", "名称"] + [r0.code for r0 in ok] + ["支撑家数"],
           [11, 24] + [11] * len(ok) + [11])
     r = 3
     for eid in eids:
-        vals = [eid, ok[0].res[eid].name] + [r0.res[eid].verdict for r0 in ok]
+        vals = [eid, ok[0].elements[eid].name] + [r0.elements[eid].verdict for r0 in ok]
         vals.append(sum(1 for v in vals[2:] if v == "是"))
         for j, v in enumerate(vals, start=1):
             c = ws3.cell(row=r, column=j, value=v)
@@ -295,10 +302,10 @@ def write_batch(runs: list[CompanyRun], bench, out_dir: Path, year: int) -> Path
     _head(ws4, 2, ["要素", "名称", "本批判定分布（是/部分/否）", "含义"], [11, 26, 26, 72], h=26)
     r = 3
     for eid in eids:
-        vs = [r0.res[eid].verdict for r0 in ok]
+        vs = [r0.elements[eid].verdict for r0 in ok]
         yes, part, no = vs.count("是"), vs.count("部分"), vs.count("否")
-        hint = ok[0].res[eid].reason[:40]
-        for j, v in enumerate([eid, ok[0].res[eid].name, f"{yes} / {part} / {no}",
+        hint = ok[0].elements[eid].reason[:40]
+        for j, v in enumerate([eid, ok[0].elements[eid].name, f"{yes} / {part} / {no}",
                                f"{'全批缺证据' if yes == 0 else ''} {hint}".strip()], start=1):
             c = ws4.cell(row=r, column=j, value=v)
             c.border, c.font = BORDER, F_B
@@ -316,10 +323,11 @@ def write_batch(runs: list[CompanyRun], bench, out_dir: Path, year: int) -> Path
     ws5.column_dimensions["B"].width = 100
     rows = [("模型版本", MODEL_VERSION), ("抽取版本", EXTRACT_VERSION),
             ("导出字段版本", SCHEMA_VERSION), ("报告年度", year),
-            ("文件数", len(runs)), ("成功", len(ok)),
-            ("失败/跳过", "\n".join(f"{r0.code} {r0.pdf.name}：{r0.error or r0.status}"
-                                 for r0 in runs if not r0.card) or "无"),
-            ("对标池", bench.note), ("权重口径", WEIGHT_NOTE)]
+            ("对标快照", batch.bench_snapshot or "—"),
+            ("文件数", batch.total), ("成功", len(ok)),
+            ("失败/跳过", "\n".join(f"{f.code} {f.file}：{f.error or f.status}"
+                                 for f in batch.failures) or "无"),
+            ("对标池", batch.bench_note), ("权重口径", WEIGHT_NOTE)]
     r = 3
     for k, v in rows:
         a = ws5.cell(row=r, column=1, value=k)
