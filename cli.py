@@ -22,7 +22,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from .config import DEFAULT_OUT, MODEL_VERSION, WEIGHT_SUM
+from .config import DEFAULT_OUT, MODEL_VERSION, WEIGHT_SUM, check_consistency
 from .pipeline import score_batch
 from .report import write_batch, write_company
 
@@ -53,6 +53,8 @@ def main(argv: list[str] | None = None) -> int:
         except (ValueError, OSError):
             pass
     args = build_parser().parse_args(argv)
+    for w in check_consistency():          # 词表与规格漂移时明确提示，不静默用旧名/旧权重
+        print(f"[警告] {w}", file=sys.stderr)
     progress = None if args.quiet else (lambda s: print(s, file=sys.stderr))
     try:
         runs, bench = score_batch(

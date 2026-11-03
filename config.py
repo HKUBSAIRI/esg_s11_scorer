@@ -71,12 +71,37 @@ SPECS: tuple[IndicatorSpec, ...] = (
 IND_NAMES = {s.ind: s.name for s in SPECS}
 IND_WEIGHTS = {s.ind: s.weight for s in SPECS}
 WEIGHT_SUM = sum(IND_WEIGHTS.values())
-WEIGHT_NOTE = (f"五项披露权重合计 {WEIGHT_SUM}%（25+30+10+5+15），"
+# 由 SPECS 拼出来，而不是手写「25+30+10+5+15」——权重一改，说明文字自动跟着改
+WEIGHT_NOTE = (f"五项披露权重合计 {WEIGHT_SUM}%"
+               f"（{'+'.join(str(IND_WEIGHTS[s.ind]) for s in SPECS)}），"
                "标准原文缺 15%，总分口径需确认")
+
+
+def check_consistency() -> list[str]:
+    """检查本包的指标名/权重与 ESG_insight 的 ``s11_elements`` 是否一致。
+
+    两边各写一份会出现「改了词表忘了改规格」的静默漂移：词表那边判 29 要素，这边按
+    SPECS 装配分数，名字/权重不一致时报告会显示旧名、总分口径会对不上。这里返回差异
+    清单（空 = 一致），由 CLI 启动时提示、由测试断言，**不**在 import 期抛错——
+    保持「词表仓库可独立演进」的边界。
+    """
+    try:
+        from s11_elements import IND_NAME, IND_WEIGHT      # 依赖 __init__ 已注入路径
+    except Exception as exc:                                # 词表仓库不可用
+        return [f"无法导入 s11_elements：{exc}"]
+    diffs: list[str] = []
+    for ind, name in IND_NAMES.items():
+        if IND_NAME.get(ind) and IND_NAME[ind] != name:
+            diffs.append(f"{ind} 名称不一致：本包「{name}」vs 词表「{IND_NAME[ind]}」")
+        if IND_WEIGHT.get(ind) is not None and IND_WEIGHT[ind] != IND_WEIGHTS[ind]:
+            diffs.append(f"{ind} 权重不一致：本包 {IND_WEIGHTS[ind]} vs 词表 {IND_WEIGHT[ind]}")
+    return diffs
+
 
 __all__ = [
     "MODEL_VERSION", "EXTRACT_VERSION", "SCHEMA_VERSION",
     "PROJECT_ROOT", "INSIGHT_APP", "STANDARD_DOC", "REPORT_DIR", "DEFAULT_OUT",
     "PERCENTILE_BANDS", "GAP_BANDS", "GAP_IMPROVE_FULL", "GAP_NEAR_ZERO", "MIN_PEER_N",
     "IndicatorSpec", "SPECS", "IND_NAMES", "IND_WEIGHTS", "WEIGHT_SUM", "WEIGHT_NOTE",
+    "check_consistency",
 ]

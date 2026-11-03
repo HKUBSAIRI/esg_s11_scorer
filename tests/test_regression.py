@@ -131,6 +131,14 @@ class TestWuxiAgainstManual(unittest.TestCase):
         self.assertEqual(eids, {"S1.1.2-5", "S1.1.1-4", "S1.1.4-1", "S1.1.4-4"})
 
 
+class TestConfigConsistency(unittest.TestCase):
+    """本包的指标名/权重必须与 ESG_insight 词表一致（防止两处各写一份漂移）。"""
+
+    def test_specs_match_elements(self):
+        from esg_s11_scorer.config import check_consistency
+        self.assertEqual(check_consistency(), [])
+
+
 class TestCalibrationFloor(unittest.TestCase):
     """10 份样本的要素一致率不得低于 75%（低于说明规则退化）。"""
 
