@@ -98,10 +98,12 @@ PDF ──① 解析── 页级文本（复用 ESG_insight/app/s11_text）
 
 ---
 
-## 四、校准：模型 vs 两套人工答案
+## 四、校准与测试：模型 vs 两套人工答案
 
 ```powershell
-python esg_s11_scorer/calibrate.py     # 产出 calibration.md / calibration.json
+cd 50-应用
+python esg_s11_scorer/calibrate.py                        # 产出 reports/calibration.md / .json
+python -m unittest discover -s esg_s11_scorer/tests -t .  # 27 条回归测试（约 4 分钟）
 ```
 
 | 校准集 | 要素一致率 | 指标分（偏差≤5 分） |
@@ -117,6 +119,16 @@ python esg_s11_scorer/calibrate.py     # 产出 calibration.md / calibration.jso
   （原始 10 样本工作簿对该项也是硬编码名单）。模型用明规则替代，长篇报告准确，
   极短章节偏宽松——这是本模型最弱的一项，已在报告里标注。
 
+**回归测试锁什么**（`tests/`，27 条）：
+
+| 文件 | 锁定的内容 |
+|---|---|
+| `test_regression.py` | 5 家 FY2025 的 5 项分逐格一致；药明 29 要素与 3 处**已登记**分歧；10 样本一致率 ≥75% |
+| `test_extract.py` | 5 家的流失率/上期/差距绝对值；药明四列年份对齐；改善率算子 |
+| `test_pipeline.py` | 批跑成功、`ScoreData` 类型、上期三级回退（含 0.0 不得当缺失）、分位样本量 |
+| `test_judge.py` | 7 条补丁各自生效；增强层不得就地改上游判定对象 |
+| `test_report.py` | 工作簿可写出、单元格是真数值、三档制「档位」行存在、分位值正确 |
+
 ---
 
 ## 五、加一个新指标（S1.2 / S2.x …）
@@ -131,20 +143,29 @@ python esg_s11_scorer/calibrate.py     # 产出 calibration.md / calibration.jso
 
 ---
 
-## 六、文件
+## 六、目录与文件
 
-| 文件 | 职责 |
-|---|---|
-| `config.py` | 版本号、阈值、指标规格（数据化） |
-| `extract.py` | **数值抽取**：表头年份对齐、句式兜底、置信度、交叉校验 |
-| `judge_plus.py` | 29 要素判定增强：7 条补丁（薪酬审查倒序、合同误判、险种/假别清单、个案计数、福利覆盖、终止语境） |
-| `bench.py` | 批内分位 / 外接对标表 / 导出对标库 |
-| `scoring.py` | 五项指标算分（含 N/A、可达上限、归一） |
-| `pipeline.py` | 编排、上期三级回退、人工兜底 |
-| `report.py` | 每家工作簿 + 批次汇总 |
-| `cli.py` / `__main__.py` | 命令行 |
-| `calibrate.py` | 回测与校准（→ `calibration.md`） |
-| `_test_extract.py` / `_test_pipeline.py` / `_test_judge.py` | 分层自测 |
+```
+esg_s11_scorer/               ← 独立 git 仓库（2026-11-03 初始化）
+├── pyproject.toml            依赖与包元数据（pypdf / openpyxl）
+├── requirements.txt
+├── models.py     ★领域模型    CompanyRun / NumFact / Extraction / Component / IndScore / ScoreCard / ScoreData / Patch / PeerRow
+├── metrics.py    ★口径算子    改善率唯一实现（含 fmt_pct）
+├── config.py                 版本号、阈值、指标规格（数据化）+ 与 s11_elements 的一致性校验
+├── extract.py                数值抽取：表头年份对齐、句式兜底、置信度、交叉校验
+├── judge_plus.py             29 要素判定增强：7 条补丁
+├── bench.py                  批内分位 / 外接对标表 / 导出对标库
+├── scoring.py                五项指标算分（N/A、可达上限、归一）+ build_card 装配
+├── pipeline.py               编排：两遍批处理、上期三级回退、人工兜底
+├── report.py                 每家工作簿 + 批次汇总
+├── cli.py / __main__.py      命令行
+├── calibrate.py              回测与校准（→ reports/）
+├── tests/                    27 条 unittest（见第四节）
+└── reports/                  校准产物（.gitignore，可随时重生成）
+```
+
+依赖方向（无环）：`models ← extract / judge_plus / bench / scoring / pipeline / report`。
+`models` 不 import 本包任何模块；外部类型 `Doc` / `ElementResult` 只在 `TYPE_CHECKING` 下引入。
 
 ---
 

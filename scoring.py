@@ -32,7 +32,9 @@ def _ev(res: dict[str, ElementResult], eid: str) -> str:
 
 
 # ---------------------------------------------------------------- S1.1.1
-def score_s111(res, turnover, prior, has_vol, bench: Bench, code: str) -> IndScore:
+def score_s111(res, turnover, prior, has_vol, bench: Bench, code: str,
+               ev: str = "") -> IndScore:
+    """S1.1.1。``ev`` 是抽取流失率时的原文，用作 A/B 的证据引用（元素命中句常是无关行）。"""
     comps: list[Component] = []
     # A 同业流失率对标
     pct_a = bench.percentile(code, "turnover", higher_better=False) if turnover else None
@@ -40,30 +42,30 @@ def score_s111(res, turnover, prior, has_vol, bench: Bench, code: str) -> IndSco
         comps.append(Component("A", "同业流失率对标", 0.4, None,
                                "无对标池或缺本期流失率，A 不评" if turnover is None
                                else f"对标池样本不足（n={bench.n}）或本家无值，A 不评",
-                               _ev(res, "S1.1.1-1")))
+                               ev or _ev(res, "S1.1.1-1")))
     else:
         comps.append(Component("A", "同业流失率对标", 0.4, bench.band(pct_a),
                                f"流失率 {turnover:.2f}% → 同业分位 {pct_a:.0f}%（{bench.kind}, n={bench.n}）",
-                               _ev(res, "S1.1.1-1")))
+                               ev or _ev(res, "S1.1.1-1")))
     # B 同业趋势对标
     imp = improvement(turnover, prior)
     if turnover is None or prior is None:
         comps.append(Component("B", "同业趋势对标", 0.3, None,
-                               "缺本期或上期流失率，B 不评", _ev(res, "S1.1.1-2")))
+                               "缺本期或上期流失率，B 不评", ev or _ev(res, "S1.1.1-2")))
     elif prior == 0:
         comps.append(Component("B", "同业趋势对标", 0.3, 100 if turnover == 0 else 0,
-                               f"上期为 0，本期 {turnover}%", _ev(res, "S1.1.1-2")))
+                               f"上期为 0，本期 {turnover}%", ev or _ev(res, "S1.1.1-2")))
     else:
         pct_b = bench.percentile(code, "improvement", higher_better=True)
         if pct_b is not None:
             comps.append(Component("B", "同业趋势对标", 0.3, bench.band(pct_b),
                                    f"改善率 {imp:+.2f}% → 同业分位 {pct_b:.0f}%（{bench.kind}, n={bench.n}）",
-                                   _ev(res, "S1.1.1-2")))
+                                   ev or _ev(res, "S1.1.1-2")))
         else:
             # 无对标池：退化为「改善率方向」，与 10 份样本专家口径一致
             comps.append(Component("B", "同业趋势对标", 0.3, 100 if imp > 0 else 0,
                                    f"改善率 {imp:+.2f}%（无对标池，按改善方向取档）",
-                                   _ev(res, "S1.1.1-2")))
+                                   ev or _ev(res, "S1.1.1-2")))
     # C 披露质量与就业终止保障
     lab, ter = _v(res, "S1.1.1-4"), _v(res, "S1.1.1-5")
     if lab == "是" and ter == "是" and has_vol:
@@ -85,7 +87,8 @@ def score_s111(res, turnover, prior, has_vol, bench: Bench, code: str) -> IndSco
 
 
 # ---------------------------------------------------------------- S1.1.2
-def score_s112(res, gap, prior_gap, gap_basis: str = "") -> IndScore:
+def score_s112(res, gap, prior_gap, gap_basis: str = "", ev: str = "") -> IndScore:
+    """S1.1.2。`ev` 是抽取薪酬差距时的原文，用作 A/B 的证据引用。"""
     comps: list[Component] = []
     if gap is None:
         comps.append(Component("A", "薪酬差距水平", 0.4, None, "未披露性别薪酬差距", ""))
@@ -95,10 +98,10 @@ def score_s112(res, gap, prior_gap, gap_basis: str = "") -> IndScore:
         a = next((s for upper, s in GAP_BANDS if g <= upper), 0)
         comps.append(Component("A", "薪酬差距水平", 0.4, a,
                                f"差距 {g:.2f}%" + ("（中位数）" if gap_basis != "avg" else "（平均值口径代入）"),
-                               _ev(res, "S1.1.2-1")))
+                               ev or _ev(res, "S1.1.2-1")))
         if prior_gap is None:
             comps.append(Component("B", "趋势得分", 0.3, None, "缺上期差距，B 不评",
-                                   _ev(res, "S1.1.2-1")))
+                                   ev or _ev(res, "S1.1.2-1")))
         else:
             pg = abs(prior_gap)
             if pg == 0:
@@ -184,8 +187,9 @@ def build_card(code: str, name: str, report_year: int, file: str,
     """把五项指标装配成一张记分卡（判分函数只负责单指标，装配在这一处）。"""
     card = ScoreCard(code=code, name=name, report_year=report_year, file=file, data=data)
     card.indicators["S1.1.1"] = score_s111(res, data.turnover, data.prior_turnover,
-                                           has_vol, bench, code)
-    card.indicators["S1.1.2"] = score_s112(res, data.gap, data.prior_gap, data.gap_basis)
+                                           has_vol, bench, code, ev=data.turnover_quote)
+    card.indicators["S1.1.2"] = score_s112(res, data.gap, data.prior_gap,
+                                           data.gap_basis, ev=data.gap_quote)
     card.indicators["S1.1.3"] = score_s113(res)
     card.indicators["S1.1.4"] = score_s114(res)
     card.indicators["S1.1.5"] = score_s115(res)

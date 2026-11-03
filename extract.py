@@ -231,10 +231,13 @@ def extract(doc: Doc, filename: str = "", report_year: int | None = None) -> Ext
                             f"{[len(s) for s in seqs]} 均不符，跳过")
                         continue
                     seq, conf, meth = hit
+                    # 摘录取「标签附近窗口」而不是整行开头：PDF 文本层常把同一页的
+                    # 两张表并进一行，line[:170] 会摘到无关的上一张表
+                    snip = line[max(0, m.start() - 20): m.start() + 150]
                     for y, v in zip(seq, vals):
                         ex.facts.append(NumFact(
                             fld, float(v), y, page.no, meth,
-                            f"[p{page.no}] {line[:170]} | 年份序列 {seq} 对位 → {y}: {v}",
+                            f"[p{page.no}] …{snip}… | 年份序列 {seq} 对位 → {y}: {v}",
                             conf))
                     break
 

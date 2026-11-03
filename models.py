@@ -178,6 +178,8 @@ class ScoreData:
     turnover_denom_note: str = ""
     bench_note: str = ""
     prior_source: str = ""
+    turnover_quote: str = ""            # 抽取该数值时的原文（A/B 项的证据引用）
+    gap_quote: str = ""
 
     def to_dict(self) -> dict:
         """导出用中文键（JSON / 台账），字段名与报告表头一致。"""

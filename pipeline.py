@@ -239,6 +239,9 @@ def run_score(runs: list[CompanyRun], bench: Bench) -> list[CompanyRun]:
             turnover_denom_note=run.ex.denom_note,
             bench_note=bench.note,
             prior_source=_prior_source(run, ry),
+            turnover_quote=(run.ex.get("turnover", ry).quote if run.ex.get("turnover", ry) else ""),
+            gap_quote=((run.ex.get("gender_gap", ry) or run.ex.get("gender_gap_avg", ry)).quote
+                       if (run.ex.get("gender_gap", ry) or run.ex.get("gender_gap_avg", ry)) else ""),
         )
         has_vol = bool(turnover is not None and _has_voluntary(run.doc))
         run.card = build_card(run.code, run.name, ry, run.pdf.name,

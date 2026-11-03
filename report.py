@@ -91,7 +91,7 @@ def write_company(run: CompanyRun, out_dir: Path) -> Path:
         ws.row_dimensions[r].height = 34
         r += 1
     for j, v in enumerate(["—", "加权总分", WEIGHT_SUM, card.total_strict,
-                           card.total_normalized, "—", "—", WEIGHT_NOTE], start=1):
+                           card.total_normalized(WEIGHT_SUM), "—", "—", WEIGHT_NOTE], start=1):
         c = ws.cell(row=r, column=j, value=v)
         c.fill, c.border = PatternFill("solid", start_color=XL_LIGHT), BORDER
         c.font = F_SC if j in (4, 5) else F_BB
