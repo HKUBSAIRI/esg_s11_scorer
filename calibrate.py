@@ -158,8 +158,8 @@ def main() -> int:
           f"> 模型版本见 `config.MODEL_VERSION`；本文件由 `calibrate.py` 生成，规则改动后重跑即可。", "",
           "## 一、10 份样本（专家裁定）", "",
           f"- 要素级一致率：**{ten['hit']}/{ten['total']} = {rate:.1%}**",
-          f"- 指标分（偏差 ≤5 分视为一致）：S1.1.1 8/10、S1.1.2 7/10、S1.1.3 8/10、"
-          f"S1.1.4 10/10、S1.1.5 5/10",
+          f"- 指标分（偏差 ≤5 分视为一致）："
+          + "、".join(f"{k} {per_ind[k][0]}/{per_ind[k][1]}" for k in keys),
           "", "| 公司 | 专家 | 模型 | 偏差 |", "|---|---|---|---|"]
     for code, name, exp, auto in ten["scores"]:
         if not exp or not auto:

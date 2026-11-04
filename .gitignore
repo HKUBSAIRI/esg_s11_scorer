@@ -19,5 +19,6 @@ out/
 # 编辑器 / 系统
 .vscode/
 .idea/
+.tmp/
 .DS_Store
 Thumbs.db

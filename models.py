@@ -330,10 +330,12 @@ class ScoreCard:
                          for k in self.indicators) / weight_sum, 1)
 
     def to_dict(self, weight_sum: float) -> dict:
+        # 分制由各项权重现算，不写死「85」：权重口径一变，导出字段名跟着变
+        scale = sum(i.weight for i in self.indicators.values())
         return {
             "代码": self.code, "公司": self.name, "报告年度": self.report_year,
             "文件": self.file,
-            "总分（严格/85 分制）": self.total_strict,
+            f"总分（严格/{scale:.0f} 分制）": self.total_strict,
             "总分（归一/百分制）": self.total_normalized(weight_sum),
             "指标": [self.indicators[k].to_dict() for k in self.indicators],
             "数据": self.data.to_dict() if self.data else {},

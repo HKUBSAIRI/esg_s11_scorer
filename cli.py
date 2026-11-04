@@ -56,6 +56,9 @@ def build_parser(settings: Settings) -> argparse.ArgumentParser:
                    help=f"输出目录（默认 ESG_OUT_DIR = {settings.out_dir}）")
     p.add_argument("--build-dir", default=str(settings.build_dir),
                    help=f"管道中间态目录：阶段产物 + gold 表（默认 ESG_BUILD_DIR = {settings.build_dir}）")
+    p.add_argument("--qualitative", choices=["element", "llm", "keyword"], default="element",
+                   help="定性指标怎么判档：element=29 要素老路径（默认）；"
+                        "llm=LLM 盲评判档；keyword=关键词兜底（不联网）")
     p.add_argument("--force", action="store_true",
                    help="忽略已有产物，所有阶段重算（改了代码但怀疑缓存时用）")
     p.add_argument("--dry-run", action="store_true",
@@ -166,7 +169,8 @@ def main(argv: list[str] | None = None) -> int:
             pdf, args.year, args.prior_dir,
             build_dir=Path(args.build_dir),
             bench_mode=args.bench, bench_csv=args.bench_csv,
-            override_csv=args.override, force=args.force, progress=progress)
+            override_csv=args.override, force=args.force,
+            qualitative=args.qualitative, progress=progress)
     except FileNotFoundError as exc:
         print(f"[错误] {exc}", file=sys.stderr)
         return 2
@@ -203,6 +207,22 @@ def main(argv: list[str] | None = None) -> int:
     for v in ok:
         print(f"[写出] {write_company(v, per)}")
     print(f"[写出] {write_batch(batch, out)}")
+
+    # 得分构成图册：每家公司五项得分 + 各分项折合综合分 + 堆叠图
+    from .scoreviz import from_batch
+    print(f"[写出] {from_batch(batch, per)}")
+
+    # 定性判档图册：只有走 llm/keyword 模式才有产物可画
+    if args.qualitative != "element" and result.artifacts is not None:
+        from .pipeline import verdicts_from
+        from .qualviz import from_pipeline_result
+        from .rubric import rubric_hash
+        vd = {v.code: verdicts_from(result.artifacts.payload(v.code, "qualitative") or {})
+              for v in ok}
+        model = settings.llm_model if args.qualitative == "llm" else ""
+        qpath = from_pipeline_result(result, vd, per, mode=args.qualitative,
+                                     model=model, fingerprint=rubric_hash())
+        print(f"[写出] {qpath}")
     return 0
 
 

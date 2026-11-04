@@ -19,8 +19,8 @@ from openpyxl.formatting.rule import CellIsRule, FormulaRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-from .config import (EXTRACT_VERSION, MODEL_VERSION, SCHEMA_VERSION,
-                     WEIGHT_NOTE, WEIGHT_SUM)
+from .config import (EXTRACT_VERSION, IND_WEIGHTS, MODEL_VERSION, SCHEMA_VERSION,
+                     SPECS, WEIGHT_NOTE, WEIGHT_SUM)
 from .models import Batch, CompanyView
 
 XL_HEAD, XL_TITLE = "FF4472C4", "FF2F5597"
@@ -241,8 +241,10 @@ def write_batch(batch: Batch, out_dir: Path) -> Path:
                 operator="between", formula=[str(lo), str(hi)],
                 fill=PatternFill("solid", bgColor=bg),
                 font=Font(name="微软雅黑", size=11, bold=True, color=fg)))
-    _note(ws, r + 1, 10, f"对标：{batch.bench_note}。总分按权重 25/30/10/5/15（合计 {WEIGHT_SUM}%）"
-                         + ("" if WEIGHT_SUM == 100 else "加权，标准原文缺 15%，百分制总分仅供参考"))
+    # 权重串由 SPECS 现算：写死「25/30/10/5/15」会在口径变更后继续印旧数字
+    _wdesc = "/".join(str(IND_WEIGHTS[s.ind]) for s in SPECS)
+    _note(ws, r + 1, 10, f"对标：{batch.bench_note}。总分按权重 {_wdesc}（合计 {WEIGHT_SUM}%）"
+                         + ("" if WEIGHT_SUM == 100 else "加权，权重不足 100%，百分制总分仅供参考"))
     ws.freeze_panes = "C3"
 
     # 分位

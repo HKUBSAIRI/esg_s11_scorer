@@ -8,7 +8,7 @@ S1.1.1 的 B 项与 S1.1.2 的 B 项共用的核心算子，三份实现迟早�
 
     extract / bench / scoring  →  metrics.improvement
 
-口径（与《S1.1 指标与判断标准》一致）：
+口径（S1.1.1 的 B 项与 S1.1.2 的 B 项共用，档位见 ``config``）：
 
     改善率 = -(本期 - 上期) / 上期 × 100
 

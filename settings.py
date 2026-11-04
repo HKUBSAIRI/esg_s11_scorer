@@ -70,6 +70,12 @@ def parse_env_file(path: str | Path) -> dict[str, str]:
     return vals
 
 
+def _mask(secret: str) -> str:
+    """密钥掩码：只留前缀与长度，够判断「配的是哪把钥匙」，不足以复原。"""
+    head = secret[:6]
+    return f"{head}…共 {len(secret)} 位"
+
+
 def _clean_value(raw: str) -> str:
     v = raw.strip()
     if v[:1] in ("'", '"'):
@@ -146,6 +152,11 @@ class Settings:
     override_csv: Path | None = None
     sample_pdf_dir: Path | None = None
     verdicts: Path | None = None
+    alias_csv: Path | None = None
+    llm_base_url: str = ""
+    llm_model: str = ""
+    llm_api_key: str = ""
+    llm_thinking: bool = False
     env_file: Path | None = None
     sources: Mapping[str, str] = field(default_factory=dict)
     warnings: tuple[str, ...] = ()
@@ -164,17 +175,29 @@ class Settings:
         ("ESG_BENCH", "bench_mode", "text"),
         ("ESG_BENCH_CSV", "bench_csv", "file"),
         ("ESG_OVERRIDE_CSV", "override_csv", "file"),
+        ("ESG_ALIAS_CSV", "alias_csv", "file"),
         ("ESG_SAMPLE_PDF_DIR", "sample_pdf_dir", "dir"),
         ("ESG_VERDICTS", "verdicts", "file"),
+        ("ESG_LLM_BASE_URL", "llm_base_url", "text"),
+        ("ESG_LLM_MODEL", "llm_model", "text"),
+        ("ESG_LLM_THINKING", "llm_thinking", "text"),
+        ("ESG_LLM_API_KEY", "llm_api_key", "secret"),
     )
 
     def rows(self) -> list[tuple[str, str, str, str]]:
-        """``[(变量名, 生效值, 来源, 状态)]``，供 ``--show-config`` 打印。状态 ∈ 存在/缺失/将创建/—。"""
+        """``[(变量名, 生效值, 来源, 状态)]``，供 ``--show-config`` 打印。状态 ∈ 存在/缺失/将创建/—。
+
+        ``secret`` 类的值只显示掩码：``--show-config`` 的输出经常被贴进工单/聊天里，
+        密钥一旦随它扩散就收不回来。
+        """
         out = []
         for name, attr, kind in self._FIELDS:
             val = getattr(self, attr)
             if val is None:
                 text, state = "（未设置，运行时自动推导）", "—"
+            elif kind == "secret":
+                text = "（未设置）" if not val else f"已配置（{_mask(str(val))}）"
+                state = "—"
             elif kind == "text":
                 text, state = str(val), "—"
             else:
@@ -193,8 +216,8 @@ class Settings:
         """「配了但路径不存在」的清单 —— 直接点名该修哪个变量。"""
         msgs: list[str] = []
         for name, attr, kind in self._FIELDS:
-            if kind == "text" or attr in ("out_dir", "build_dir"):  # 输出/落地目录不存在属正常，运行时创建
-                continue
+            if kind in ("text", "secret") or attr in ("out_dir", "build_dir"):
+                continue  # 文本项无路径可言；输出/落地目录不存在属正常，运行时创建
             val = getattr(self, attr)
             if val is not None and not Path(val).exists():
                 msgs.append(f"{name} 指向的路径不存在：{val}")
@@ -272,6 +295,10 @@ def build(env_file: str | Path | None = None) -> Settings:
     override_csv = to_path(raw_ovr, root) if raw_ovr else None
     sources["ESG_OVERRIDE_CSV"] = src if raw_ovr else "默认（不读人工兜底表）"
 
+    raw_alias, src = lay.raw("ESG_ALIAS_CSV")
+    alias_csv = to_path(raw_alias, root) if raw_alias else None
+    sources["ESG_ALIAS_CSV"] = src if raw_alias else "默认（只用文件名与股票代码脱敏）"
+
     raw_sample, src = lay.raw("ESG_SAMPLE_PDF_DIR")
     sample_pdf_dir = (to_path(raw_sample, root) if raw_sample
                       else app_dir / "sample" / "01-源PDF")
@@ -282,12 +309,30 @@ def build(env_file: str | Path | None = None) -> Settings:
                 else app_dir / "sample" / "04-脚本与索引" / "verdicts.py")
     sources["ESG_VERDICTS"] = src
 
+    # 定性判档用的 LLM：base_url / model 是普通文本，api_key 是密钥（只进 .env）
+    llm_base_url, src = lay.raw("ESG_LLM_BASE_URL")
+    sources["ESG_LLM_BASE_URL"] = src
+    llm_model, src = lay.raw("ESG_LLM_MODEL")
+    sources["ESG_LLM_MODEL"] = src
+    llm_api_key, src = lay.raw("ESG_LLM_API_KEY")
+    sources["ESG_LLM_API_KEY"] = src if llm_api_key else "默认（未配置）"
+    # 思维链默认关闭：判档是「照标准选一档」，推理链只会吃 token 预算并让 JSON 被截断
+    raw_think, src = lay.raw("ESG_LLM_THINKING")
+    llm_thinking = str(raw_think or "").strip().lower() in ("1", "on", "true", "yes", "开")
+    sources["ESG_LLM_THINKING"] = src if raw_think else "默认（关）"
+    if (llm_base_url or llm_model) and not llm_api_key:
+        warnings.append("配了 ESG_LLM_BASE_URL / ESG_LLM_MODEL 但缺 ESG_LLM_API_KEY，"
+                        "定性判档将退回关键词兜底")
+
     return Settings(
         year=year, project_root=root, pdf_dir=pdf_dir, out_dir=out_dir,
         build_dir=build_dir,
         report_root=report_root, insight_app=insight_app, standard_doc=standard_doc,
         prior_dir=prior_dir, bench_mode=bench_mode, bench_csv=bench_csv,
         override_csv=override_csv, sample_pdf_dir=sample_pdf_dir, verdicts=verdicts,
+        alias_csv=alias_csv,
+        llm_base_url=llm_base_url, llm_model=llm_model, llm_api_key=llm_api_key,
+        llm_thinking=llm_thinking,
         env_file=env_path, sources=sources, warnings=tuple(warnings))
 
 
