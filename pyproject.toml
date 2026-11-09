@@ -23,4 +23,4 @@ tables = ["pyarrow>=14"]
 packages = ["esg_s11_scorer"]
 
 [tool.setuptools.package-data]
-esg_s11_scorer = ["README.md", ".env.example"]
+esg_s11_scorer = ["README.md", ".env.example", "keywords.csv"]

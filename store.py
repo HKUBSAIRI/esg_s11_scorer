@@ -13,8 +13,7 @@
 --------------------------
     key(parse)    = H( pdf 字节 + PARSE_VERSION )
     key(facts)    = H( key(parse) + EXTRACT_VERSION + 抽数依赖的字节（override 表） )
-    key(elements) = H( key(parse) + RULESET_VERSION + JUDGE_VERSION + JUDGE_PLUS_VERSION )
-    key(score)    = H( key(facts) + key(elements) + key(prior facts) + 对标快照 + MODEL_VERSION )
+    key(score)    = H( key(facts) + key(prior facts) + key(判档) + 对标快照 + MODEL_VERSION )
 
 上游变了下游必变，规则变了自己变，无关的不会牵连——这就是把「整批重跑」换成
 「只重算受影响的分区」的全部依据。指纹只由内容决定，不看时间戳，所以同一份输入

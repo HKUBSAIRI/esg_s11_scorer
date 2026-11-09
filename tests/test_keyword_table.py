@@ -32,7 +32,7 @@ class TestRows(unittest.TestCase):
     def test_all_words_present_once(self):
         total = sum(len(r.keywords) for r in RUBRICS.values())
         self.assertEqual(len(SEP.join(w for _, w in table_rows()).split(SEP)), total)
-        self.assertEqual(total, 218)
+        self.assertEqual(total, 350)
 
 
 class TestWorkbook(unittest.TestCase):

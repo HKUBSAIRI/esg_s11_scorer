@@ -170,5 +170,147 @@ class TestPackageWiring(unittest.TestCase):
         self.assertIn(str(S.get_settings().insight_app), sys.path)
 
 
+class TestExternalResources(unittest.TestCase):
+    """MySQL / GPU 是「备用」配置：没配不算错，半配要出声，取值接口要能直接喂给客户端。"""
+
+    def setUp(self):
+        self.tmpdir = Path(__file__).resolve().parent / "_env_case_ext"
+        self.tmpdir.mkdir(exist_ok=True)
+        self.env = self.tmpdir / ".env"
+        patcher = mock.patch.dict(os.environ, {"ESG_PROJECT_ROOT": str(self.tmpdir)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        for k in S.iter_env_names():              # 别被本机真实环境变量干扰
+            if k != "ESG_PROJECT_ROOT":
+                os.environ.pop(k, None)
+
+    def tearDown(self):
+        self.env.unlink(missing_ok=True)
+        try:
+            self.tmpdir.rmdir()
+        except OSError:
+            pass
+
+    def _build(self, text: str = ""):
+        self.env.write_text(text, encoding="utf-8")
+        return S.build(str(self.env))
+
+    def test_unset_is_not_an_error(self):
+        """打分链路不读库，所以「一项都没配」必须是干净状态，不能刷警告。"""
+        s = self._build("")
+        self.assertFalse(s.db_ready)
+        self.assertEqual(s.gpu_account_names(), ())
+        self.assertEqual(s.warnings, ())
+
+    def test_db_params_feeds_pymysql(self):
+        s = self._build("ESG_DB_HOST=h\nESG_DB_USER=u\nESG_DB_PASSWORD=p\nESG_DB_NAME=d\n")
+        self.assertTrue(s.db_ready)
+        self.assertEqual(s.db_params(), {
+            "host": "h", "port": 3306, "user": "u",
+            "password": "p", "database": "d", "charset": "utf8mb4"})
+
+    def test_partial_db_warns_and_refuses(self):
+        s = self._build("ESG_DB_HOST=h\n")
+        self.assertFalse(s.db_ready)
+        with self.assertRaises(ValueError):
+            s.db_params()
+        self.assertTrue(any("MySQL" in w for w in s.warnings))
+
+    def test_bad_db_port_falls_back(self):
+        s = self._build("ESG_DB_PORT=三千\n")
+        self.assertEqual(s.db_port, S.DEFAULT_DB_PORT)
+        self.assertTrue(any("ESG_DB_PORT" in w for w in s.warnings))
+
+    def test_gpu_account_default_and_named(self):
+        s = self._build(
+            "ESG_GPU_HOST=10.0.0.1\nESG_GPU_DEFAULT=zixin\n"
+            "ESG_GPU_ZIXIN_USER=z\nESG_GPU_ZIXIN_PASSWORD=p\nESG_GPU_ZIXIN_DIR=/w\n"
+            "ESG_GPU_KYRIE_USER=k\nESG_GPU_KYRIE_PASSWORD=q\nESG_GPU_KYRIE_DIR=/e\n")
+        self.assertEqual(s.gpu_account_names(), ("kyrie", "zixin"))
+        self.assertEqual(s.gpu_account(), {"host": "10.0.0.1", "port": 22,
+                                           "username": "z", "password": "p", "dir": "/w"})
+        self.assertEqual(s.gpu_account("kyrie")["dir"], "/e")
+        with self.assertRaises(ValueError):
+            s.gpu_account("nobody")
+
+    def test_bad_gpu_default_warns(self):
+        s = self._build("ESG_GPU_DEFAULT=nobody\n")
+        self.assertEqual(s.gpu_default, "")
+        self.assertTrue(any("ESG_GPU_DEFAULT" in w for w in s.warnings))
+
+    def test_short_password_not_even_partly_printed(self):
+        """``45176_`` 这种前缀已经是大半个口令了，--show-config 不该露出来。"""
+        pwd = "45176_CKnfP"
+        s = self._build(f"ESG_DB_PASSWORD={pwd}\n")
+        shown = {r[0]: r[1] for r in s.rows()}["ESG_DB_PASSWORD"]
+        self.assertNotIn("45176", shown)
+        self.assertIn(f"共 {len(pwd)} 位", shown)
+
+
+class TestYearAwarePaths(unittest.TestCase):
+    """``{year}`` 占位符 + 「年度 vs 目录名」自检 —— 换年度时不许静默串档。"""
+
+    def setUp(self):
+        self.tmpdir = Path(__file__).resolve().parent / "_env_case_year"
+        self.tmpdir.mkdir(exist_ok=True)
+        self.env = self.tmpdir / ".env"
+        patcher = mock.patch.dict(os.environ, {"ESG_PROJECT_ROOT": str(self.tmpdir)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        for k in S.iter_env_names():
+            if k != "ESG_PROJECT_ROOT":
+                os.environ.pop(k, None)
+
+    def tearDown(self):
+        self.env.unlink(missing_ok=True)
+        try:
+            self.tmpdir.rmdir()
+        except OSError:
+            pass
+
+    def _build(self, text: str = ""):
+        self.env.write_text(text, encoding="utf-8")
+        return S.build(str(self.env))
+
+    def test_expand_year_tokens(self):
+        self.assertEqual(S.expand_year("a/FY{year}", 2026), "a/FY2026")
+        self.assertEqual(S.expand_year("a/FY{year-1}", 2026), "a/FY2025")
+        self.assertEqual(S.expand_year("{year}-{year-1}-{year+1}", 2026), "2026-2025-2027")
+        self.assertEqual(S.expand_year("无占位符", 2026), "无占位符")
+
+    def test_token_makes_every_io_path_follow_the_year(self):
+        s = self._build(
+            "ESG_YEAR=2026\n"
+            "ESG_REPORT_ROOT=数据/报告\n"
+            "ESG_PDF_DIR=数据/报告/FY{year}\n"
+            "ESG_PRIOR_DIR=数据/报告/FY{year-1}\n"
+            "ESG_OVERRIDE_CSV=结果/overrides_FY{year}.csv\n")
+        self.assertEqual(s.pdf_dir, self.tmpdir / "数据/报告/FY2026")
+        self.assertEqual(s.prior_dir, self.tmpdir / "数据/报告/FY2025")
+        self.assertEqual(s.override_csv, self.tmpdir / "结果/overrides_FY2026.csv")
+        self.assertEqual(s.warnings, ())          # 年度与目录名一致，不该有警告
+
+    def test_year_mismatch_warns(self):
+        """最常见的串档写法：ESG_YEAR 改了，路径还写着 FY2025。"""
+        s = self._build("ESG_YEAR=2026\n"
+                        "ESG_PDF_DIR=数据/FY2025\n"
+                        "ESG_PRIOR_DIR=数据/FY2024\n")
+        self.assertTrue(any("ESG_PDF_DIR" in w and "FY2026" in w for w in s.warnings))
+        self.assertTrue(any("ESG_PRIOR_DIR" in w and "FY2025" in w for w in s.warnings))
+
+    def test_optional_file_absent_is_not_an_error(self):
+        """兜底表/别名表今年可能还没有：要显示，但不能算错误。"""
+        s = self._build("ESG_OVERRIDE_CSV=结果/overrides_FY{year}.csv\n")
+        states = {r[0]: r[3] for r in s.rows()}
+        self.assertEqual(states["ESG_OVERRIDE_CSV"], "不存在（可选）")
+        self.assertFalse(any("ESG_OVERRIDE_CSV" in m for m in s.problems()))
+
+    def test_output_and_build_are_not_path_problems(self):
+        """输出/中间态目录不存在属正常（运行时创建），不该报错。"""
+        s = self._build("ESG_OUT_DIR=还没建的目录\nESG_BUILD_DIR=也没建\n")
+        msgs = s.problems()
+        self.assertFalse([m for m in msgs if "ESG_OUT_DIR" in m or "ESG_BUILD_DIR" in m])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

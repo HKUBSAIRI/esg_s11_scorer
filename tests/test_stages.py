@@ -18,10 +18,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import esg_s11_scorer  # noqa: F401
 from esg_s11_scorer import stages, tables
 from esg_s11_scorer.config import REPORT_DIR
-from esg_s11_scorer.models import (ElementJudgement, Extraction, NumFact, Patch,
-                                   render_quote)
-from esg_s11_scorer.pipeline import Pipeline, run_pipeline
-from esg_s11_scorer.store import TableStore
+from esg_s11_scorer.models import Extraction, NumFact
+from esg_s11_scorer.pipeline import Pipeline, qualitative_artifact, qualitative_unit, run_pipeline
+from esg_s11_scorer.store import ArtifactStore, TableStore
 
 PDF = REPORT_DIR / "FY2025" / "02269_WUXI_BIO_ESG_FY2025.pdf"
 OVERALL = ("S1.1.1", "S1.1.2", "S1.1.3", "S1.1.4", "S1.1.5")
@@ -75,18 +74,10 @@ class TestSerialisation(unittest.TestCase):
         again = stages.doc_to_payload(doc)
         self.assertEqual(again["pages"], payload["pages"])
 
-    def test_element_judgement_roundtrip(self):
-        j = ElementJudgement(eid="S1.1.1-1", ind="S1.1.1", name="雇佣关系",
-                             verdict="是", reason="有制度", confidence=0.8,
-                             quotes=[render_quote(12, "原文句子")], doubt=False)
-        back = ElementJudgement.from_dict(j.to_dict())
-        self.assertEqual(back.verdict, "是")
-        self.assertEqual(back.top_quote(), "[p12] 原文句子")
-        self.assertEqual(back.reason, "有制度")
-
-    def test_patch_roundtrip(self):
-        p = Patch("S1.1.2-5", "薪酬审查", "否", "是", "倒序命中")
-        self.assertEqual(Patch.from_dict(p.to_dict()), p)
+    def test_element_path_removed(self):
+        """元素路径已删除：stages 里不该再留判定入口。"""
+        self.assertFalse(hasattr(stages, "run_judge"))
+        self.assertFalse(hasattr(stages, "has_voluntary"))
 
 
 class TestPriorResolution(unittest.TestCase):
@@ -134,6 +125,35 @@ class TestPriorResolution(unittest.TestCase):
         self.assertIn("人工填入", label)
 
 
+class TestQualitativeArtifactPerMode(unittest.TestCase):
+    """两种判档模式各存各的，不能互相顶掉。
+
+    曾经共用一个 ``qualitative.json``：跑过 keyword（测试套件就是 keyword）之后，
+    llm 的产物被覆盖，下一次真跑得重新调 25 次模型——缓存看起来在工作，实际每次都在花钱。
+    """
+
+    def test_modes_keep_separate_artifacts(self):
+        from esg_s11_scorer import blind as blind_mod
+
+        with tempfile.TemporaryDirectory() as td:
+            store = ArtifactStore(root=Path(td), year=2025)
+            bl = blind_mod.build("01177", filename="01177_X.pdf", extra=None)
+            for mode in ("keyword", "llm"):
+                qualitative_unit(store, "01177", "01177_X.pdf", mode=mode,
+                                 blinder=bl, llm=None, has_turnover=False)
+            for mode in ("keyword", "llm"):
+                name = qualitative_artifact(mode)
+                self.assertIsNotNone(store.key("01177", name), f"{name} 应存在")
+            self.assertNotEqual(store.key("01177", qualitative_artifact("llm")),
+                                store.key("01177", qualitative_artifact("keyword")),
+                                "两种口径的指纹必须不同")
+            # 再跑 keyword：应复用（键不变），且 llm 的产物没被顶掉
+            llm_key = store.key("01177", qualitative_artifact("llm"))
+            qualitative_unit(store, "01177", "01177_X.pdf", mode="keyword",
+                             blinder=bl, llm=None, has_turnover=False)
+            self.assertEqual(store.key("01177", qualitative_artifact("llm")), llm_key)
+
+
 class TestPipelineCache(unittest.TestCase):
     """真跑一遍：复用要真的复用，重算要真的重算。"""
 
@@ -141,7 +161,7 @@ class TestPipelineCache(unittest.TestCase):
     def setUpClass(cls):
         cls.td = tempfile.TemporaryDirectory()
         cls.build = Path(cls.td.name)
-        cls.kw = dict(build_dir=cls.build, bench_mode="none")
+        cls.kw = dict(build_dir=cls.build, bench_mode="none", qualitative="keyword")
 
     @classmethod
     def tearDownClass(cls):
@@ -150,7 +170,7 @@ class TestPipelineCache(unittest.TestCase):
     def test_second_run_reuses_everything(self):
         first = run_pipeline(PDF, 2025, None, **self.kw)
         second = run_pipeline(PDF, 2025, None, **self.kw)
-        for name in ("parse", "facts", "elements", "score"):
+        for name in ("parse", "facts", "qualitative", "score"):
             self.assertEqual(second.stats[name].rebuilt, 0, f"{name} 不该重算")
             self.assertEqual(second.stats[name].reused, 1, f"{name} 应复用")
         self.assertEqual(_scores(first.batch), _scores(second.batch))
@@ -174,7 +194,7 @@ class TestPipelineCache(unittest.TestCase):
                 "02269,prior_turnover,2024,11.5,测试用\n", encoding="utf-8")
             after = run_pipeline(PDF, 2025, None, override_csv=csv_path, **self.kw)
             self.assertEqual(after.stats["parse"].reused, 1, "override 改动不该重解析 PDF")
-            self.assertEqual(after.stats["elements"].reused, 1, "override 改动不该重跑判定")
+            self.assertEqual(after.stats["qualitative"].reused, 1, "override 改动不该重跑判档")
             self.assertEqual(after.stats["facts"].rebuilt, 1, "override 改动必须重抽数")
             data = after.batch.views[0].card.data
             self.assertEqual(data.prior_turnover, 11.5)
@@ -188,12 +208,14 @@ class TestPipelineCache(unittest.TestCase):
     def test_artifacts_and_tables_exist(self):
         run_pipeline(PDF, 2025, None, **self.kw)
         unit = self.build / "FY2025" / "02269"
-        for stage in ("parse", "facts", "elements", "score", "prior"):
+        for stage in ("parse", "facts", "score", "prior", "qualitative-keyword"):
             self.assertTrue((unit / f"{stage}.json").is_file(), stage)
         tables_dir = TableStore(root=self.build / "tables" / "FY2025", year=2025)
-        for name in ("facts", "elements", "patches", "companies", "indicators",
+        for name in ("facts", "companies", "indicators",
                      "components", "bench_rows", "bench_meta"):
             self.assertTrue(tables_dir.exists(name), name)
+        for gone in ("elements", "patches"):
+            self.assertFalse(tables_dir.exists(gone), f"{gone} 表不该再产出")
 
 
 class TestPublishedSchema(unittest.TestCase):

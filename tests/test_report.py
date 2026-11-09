@@ -32,7 +32,7 @@ class TestReport(unittest.TestCase):
         prior = REPORT_DIR / "FY2024"
         cls.result = run_pipeline(
             REPORT_DIR / "FY2025", 2025, prior if prior.exists() else None,
-            build_dir=BUILD_DIR,
+            build_dir=BUILD_DIR, qualitative="keyword",
             override_csv=override if override.exists() else None)
         cls.batch = cls.result.batch
         cls.tmp = tempfile.TemporaryDirectory()
@@ -48,7 +48,7 @@ class TestReport(unittest.TestCase):
         self.assertTrue(path.exists())
 
         wb = load_workbook(path)
-        self.assertEqual(wb.sheetnames, ["总览", "分项判分", "数据取值", "29 要素", "运行台账"])
+        self.assertEqual(wb.sheetnames, ["总览", "分项明细", "数据取值", "运行台账"])
 
         ws = wb["总览"]
         # 总分必须是数字（重构时这里曾写入绑定方法而报错）
@@ -59,19 +59,36 @@ class TestReport(unittest.TestCase):
         self.assertEqual(ws.cell(row=7, column=1).value, "S1.1.5")
 
     def test_tiered_rows(self):
-        """三档制指标在「分项判分」里必须有一行「档位」，且分值等于指标分。"""
+        """三档制指标在「分项明细」里必须有一行「档位」，且分值等于指标分。"""
         view = next(v for v in self.batch.views if v.code == "02269")
         wb = load_workbook(write_company(view, self.out))
-        ws = wb["分项判分"]
+        ws = wb["分项明细"]
         rows = [tuple(c.value for c in r) for r in ws.iter_rows(min_row=3)]
         tiered = [r for r in rows if r[1] and "三档制" in str(r[1])]
         self.assertEqual(len(tiered), 3, [r[1] for r in rows])
         self.assertTrue(all(isinstance(r[3], int) for r in tiered))
 
+    def test_every_indicator_has_score_formula(self):
+        """每个指标都要有一行「小计」：得分是真数值，算式能复算回这个数。"""
+        view = next(v for v in self.batch.views if v.code == "02269")
+        wb = load_workbook(write_company(view, self.out))
+        ws = wb["分项明细"]
+        subs = {}
+        for row in ws.iter_rows(min_row=3, values_only=True):
+            if row[1] == "小计（指标得分）":
+                subs[row[0]] = row
+        self.assertEqual(sorted(subs), ["S1.1.1", "S1.1.2", "S1.1.3", "S1.1.4", "S1.1.5"])
+        for k, row in subs.items():
+            ind = view.card.indicators[k]
+            self.assertIsInstance(row[3], (int, float))
+            self.assertAlmostEqual(float(row[3]), ind.strict, places=6)
+            self.assertIn("=", str(row[6]), f"{k} 的算式缺失")
+            self.assertIn(f"{ind.strict:.1f}", str(row[6]), f"{k} 的算式与得分不一致")
+
     def test_batch_workbook(self):
         path = write_batch(self.batch, self.out)
         wb = load_workbook(path)
-        self.assertEqual(wb.sheetnames, ["汇总", "对标分位", "要素矩阵", "缺口清单", "运行台账"])
+        self.assertEqual(wb.sheetnames, ["汇总", "对标分位", "分项明细", "运行台账"])
         ws = wb["汇总"]
         codes = [ws.cell(row=r, column=1).value for r in range(3, 8)]
         self.assertEqual(sorted(codes), ["01177", "01513", "01801", "02269", "03692"])
@@ -81,6 +98,21 @@ class TestReport(unittest.TestCase):
                for r in range(3, 8)}
         self.assertEqual(pct["01513"], 20.0)
         self.assertEqual(pct["01177"], 100.0)
+
+    def test_batch_detail_covers_every_company(self):
+        """汇总册的「分项明细」要把每家 5 个指标的小计都列出来，且与记分卡一致。"""
+        path = write_batch(self.batch, self.out)
+        wb = load_workbook(path)
+        ws = wb["分项明细"]
+        subs = {}
+        for row in ws.iter_rows(min_row=3, values_only=True):
+            if row[3] == "小计（指标得分）":
+                subs[(row[0], row[2])] = row[5]
+        self.assertEqual(len(subs), 5 * 5, "应有 5 家 × 5 个指标的小计行")
+        for view in self.batch.views:
+            for k in ("S1.1.1", "S1.1.2", "S1.1.3", "S1.1.4", "S1.1.5"):
+                self.assertAlmostEqual(float(subs[(view.code, k)]),
+                                       view.card.indicators[k].strict, places=6)
 
     def test_tables_are_the_source(self):
         """报告里的每一家都必须能在 gold 表里查到同名一行（防止报告自己算）。"""

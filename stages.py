@@ -4,7 +4,7 @@
 为什么把「算什么」和「存哪、什么时候算」分开
 ------------------------------------------
 ``store.py`` 管状态，``pipeline.py`` 管顺序，本模块只回答一个问题：
-「给定一份解析结果，数值该抽成什么、要素该判成什么、分该怎么算」。
+「给定一份解析结果，数值该抽成什么、分该怎么算」。
 
 好处是每一步都能单测：喂一份人造 payload，断言输出，不需要 PDF、不需要目录、
 不需要跑批。碰巧这也是缓存能成立的前提——只有纯函数，同一个 key 才能对应同一份结果。
@@ -12,14 +12,12 @@
 from __future__ import annotations
 
 import csv
-import re
 from pathlib import Path
 
 from s11_text import Doc, Page, load_pdf
 
 from .extract import extract
-from .judge_plus import adjudicate
-from .models import ElementJudgement, Extraction, NumFact, Patch
+from .models import Extraction, NumFact
 
 
 # ---------------------------------------------------------------- 解析
@@ -111,32 +109,6 @@ def apply_overrides(ex: Extraction, rows: list[dict], code: str) -> int:
     return n
 
 
-# ---------------------------------------------------------------- 判定
-VOLUNTARY = (
-    re.compile(r"voluntary\s+(?:employee\s+)?turnover", re.I),
-    re.compile(r"retention\s+rate\s*=\s*1\s*[-−]", re.I),
-    re.compile(r"(?:人才)?留存率\s*(?:=|为|達|达)"),
-)
-
-
-def has_voluntary(doc: Doc) -> bool:
-    """是否披露了自愿离职口径（留存率或自愿离职率均可）。
-
-    改造前这段在 ``run_score`` 里、依赖 ``Doc``。打分阶段不该再持有整份文本，
-    所以它跟着判定一起前移到本层，结果作为 elements 产物的一部分。
-    """
-    text = doc.text
-    return any(rx.search(text) for rx in VOLUNTARY)
-
-
-def run_judge(parse_payload: dict) -> tuple[dict[str, ElementJudgement], list[Patch], bool]:
-    """解析产物 → （29 要素判定, 生效补丁, 是否披露自愿离职口径）。"""
-    doc = doc_from_payload(parse_payload)
-    res, patches = adjudicate(doc)
-    judgements = {eid: ElementJudgement.from_result(r) for eid, r in res.items()}
-    return judgements, patches, has_voluntary(doc)
-
-
 # ---------------------------------------------------------------- 上期值
 def resolve_prior(facts: Extraction, prior: Extraction | None, year: int,
                   prior_label: str = "") -> dict:
@@ -208,6 +180,5 @@ def prior_source_label(facts: Extraction, attach_source: str, year: int,
 __all__ = [
     "doc_to_payload", "doc_from_payload", "run_parse", "run_extract",
     "read_overrides", "apply_overrides", "OVERRIDE_ALIASES",
-    "has_voluntary", "run_judge",
     "resolve_prior", "prior_values", "prior_source_label",
 ]

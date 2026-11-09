@@ -24,49 +24,13 @@ from pathlib import Path
 
 from openpyxl import Workbook
 from openpyxl.chart import BarChart, Reference
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.styles import PatternFill            # 台账底色用；样式基元取自 xlstyle
 
 from .config import IND_WEIGHTS, MODEL_VERSION, SPECS, WEIGHT_SUM
-
-HEAD, TITLE, LIGHT = "FF4472C4", "FF2F5597", "FFD9E2F3"
-BD = "FFBFBFBF"
-_thin = Side(style="thin", color=BD)
-BORDER = Border(left=_thin, right=_thin, top=_thin, bottom=_thin)
-F_T = Font(name="微软雅黑", size=13, bold=True, color="FFFFFFFF")
-F_H = Font(name="微软雅黑", size=10, bold=True, color="FFFFFFFF")
-F_B = Font(name="微软雅黑", size=10)
-F_BB = Font(name="微软雅黑", size=10, bold=True)
-F_BIG = Font(name="微软雅黑", size=12, bold=True)
-F_N = Font(name="微软雅黑", size=9, color="FF595959")
-CEN = Alignment(horizontal="center", vertical="center", wrap_text=True)
-LEF = Alignment(horizontal="left", vertical="center", wrap_text=True)
+from .xlstyle import (BORDER, CEN, F_B, F_BB, F_BIG, LEFC as LEF, LIGHT, head, lines_for,
+                      title)
 
 KEYS = [s.ind for s in SPECS]
-
-
-def _text_units(text: str) -> int:
-    """估算显示宽度：CJK 记 2，ASCII 记 1（与 Excel 列宽单位一致）。"""
-    return sum(2 if ord(ch) > 127 else 1 for ch in str(text))
-
-
-def _lines_for(text: str, width: int) -> int:
-    return max(1, -(-_text_units(text) // max(8, width - 2)))
-
-
-def _title(ws, text: str, ncol: int) -> None:
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncol)
-    c = ws.cell(row=1, column=1, value=text)
-    c.font, c.fill, c.alignment = F_T, PatternFill("solid", start_color=TITLE), CEN
-    ws.row_dimensions[1].height = 30
-
-
-def _head(ws, row: int, heads: list[str], widths: list[int]) -> None:
-    for j, (t, w) in enumerate(zip(heads, widths), start=1):
-        c = ws.cell(row=row, column=j, value=t)
-        c.font, c.fill, c.alignment, c.border = F_H, PatternFill(
-            "solid", start_color=HEAD), CEN, BORDER
-        ws.column_dimensions[c.column_letter].width = w
-    ws.row_dimensions[row].height = 30
 
 
 def contribution(ind_weight: float, comp_weight: float, score: float | None) -> float:
@@ -107,13 +71,13 @@ def write(views, out_path: str | Path, *, year: int) -> Path:
     wb = Workbook()
     ws = wb.active
     ws.title = "总分与构成"
-    _title(ws, f"S1.1 得分及构成（{year}，{len(codes)} 家）　"
+    title(ws, f"S1.1 得分及构成（{year}，{len(codes)} 家）　"
                f"总分 = Σ 指标权重 × 指标得分　（模型 {MODEL_VERSION}）", len(KEYS) + 4)
 
     # ---- 上表：五项得分与总分
     heads = ["代码", "公司"] + [f"{k}\n({IND_WEIGHTS[k]}%)" for k in KEYS] + \
             ["加权总分\n(严格)", "加权总分\n(归一)"]
-    _head(ws, 2, heads, [9, 28] + [11] * len(KEYS) + [12, 12])
+    head(ws, 2, heads, [9, 28] + [11] * len(KEYS) + [12, 12])
     r = 3
     for v in views:
         card = v.card
@@ -173,8 +137,8 @@ def write(views, out_path: str | Path, *, year: int) -> Path:
 
     # ---- 分项明细
     ws2 = wb.create_sheet("分项明细")
-    _title(ws2, "分项明细：分项得分 × 分项权重 × 指标权重 = 折合综合分", 10)
-    _head(ws2, 2, ["代码", "公司", "指标", "指标权重", "分项", "分项权重", "分项得分",
+    title(ws2, "分项明细：分项得分 × 分项权重 × 指标权重 = 折合综合分", 10)
+    head(ws2, 2, ["代码", "公司", "指标", "指标权重", "分项", "分项权重", "分项得分",
                    "折合综合分", "说明"],
           [9, 34, 8, 10, 8, 10, 10, 12, 74])
     r = 3
@@ -188,14 +152,14 @@ def write(views, out_path: str | Path, *, year: int) -> Path:
                 c.border, c.font = BORDER, (F_BB if j == 8 else F_B)
                 c.alignment = LEF if j == 9 else CEN
             ws2.row_dimensions[r].height = max(
-                20, max(_lines_for(row["note"], 74),
-                        _lines_for(row["name"], 34)) * 14 + 8)
+                20, max(lines_for(row["note"], 74),
+                        lines_for(row["name"], 34)) * 14 + 8)
             r += 1
     ws2.freeze_panes = "C3"
 
     # ---- 口径
     ws3 = wb.create_sheet("口径")
-    _title(ws3, "权重与计分口径", 2)
+    title(ws3, "权重与计分口径", 2)
     ws3.column_dimensions["A"].width = 26
     ws3.column_dimensions["B"].width = 104
     rows = [("模型版本", MODEL_VERSION),

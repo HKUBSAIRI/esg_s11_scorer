@@ -26,8 +26,8 @@ from esg_s11_scorer.scoreviz import KEYS, contribution, rows_of, write  # noqa: 
 def _card(code: str, name: str, tiers: dict[str, int]):
     data = ScoreData(report_year=2025, turnover=10.0, prior_turnover=11.0,
                      gap=5.0, prior_gap=6.0)
-    return build_card(code, name, 2025, "x.pdf", {}, data,
-                      Bench(kind="none", note="测试：无对标池"), True,
+    return build_card(code, name, 2025, "x.pdf", data,
+                      Bench(kind="none", note="测试：无对标池"),
                       verdicts={k: Verdict(key=k, tier=v, reason="测试", source="llm")
                                 for k, v in tiers.items()})
 

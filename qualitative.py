@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """定性判档：关键词召回段落 → 一次判档（LLM 主路径 / 关键词兜底）。
 
-为什么是「召回 + 一次判档」而不是「29 个要素 + 组合规则」
+为什么是「召回 + 一次判档」而不是「拆成多个二元判据 + 组合规则」
 -------------------------------------------------------
-评分标准（``rubric.py``）本身就是按 100/50/0 三档写的自然语言判据。把它拆成 29 个二元要素
-再用 if/elif 拼回档位，等于把一个语义判断拆成 29 个词法判断再手工合并——每多拆一格就多
-一处误判面（上一版为此打了 7 条正则补丁），而合并规则本身又是一份没人能维护的隐式口径。
+评分标准（``rubric.py``）本身就是按 100/50/0 三档写的自然语言判据。把它拆成几十个
+二元判据再用 if/elif 拼回档位，等于把一个语义判断拆成几十个词法判断再手工合并——每多
+拆一格就多一处误判面，而合并规则本身又是一份没人能维护的隐式口径。
 
 现在的链路只有三步，每一步都能独立解释：
 
@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 from s11_text import Doc, sentences
 
@@ -88,14 +89,53 @@ class Verdict:
 
 
 # ---------------------------------------------------------------- 1 召回
+@lru_cache(maxsize=None)
+def _head_pattern(kw: str) -> re.Pattern[str] | None:
+    """ASCII 开头的词只允许从**词首**命中；返回 None 表示按纯子串（中文走这条）。
+
+    为什么卡词首而不卡词尾：英语里最脏的误命中都是「被包在更长的词里」——
+    ``wage`` 命中 ``sewage``、``EAP`` 命中 ``cheaper``/``leapfrog``、``diversity`` 命中
+    ``biodiversity``、``termination`` 命中 ``determination``、``employment`` 命中
+    ``unemployment``（意思还相反）。这些只要前一个字符是字母就能挡住。
+    词尾不设边界，单复数与词形变化照旧命中（``employee benefit`` 仍命中 ``employee benefits``、
+    ``statutory holiday`` 仍命中 ``statutory holidays``），否则会把正常写法一起挡掉。
+    """
+    low = kw.lower()
+    if not low or not ("a" <= low[0] <= "z"):
+        return None
+    return re.compile(r"(?<![a-z0-9])" + re.escape(low))
+
+
+def _match(low: str, kw: str) -> bool:
+    pat = _head_pattern(kw)
+    return bool(pat.search(low)) if pat is not None else kw.lower() in low
+
+
 def _hits(low: str, keywords: tuple[str, ...]) -> int:
     """命中多少个**不同**关键词（重复披露不增加权重，与细则「同义词不增证据组数」一致）。"""
-    return sum(1 for k in keywords if k.lower() in low)
+    return sum(1 for k in keywords if _match(low, k))
+
+
+# 「命中很多、信息为零」的两类段落。实测：港交所那句「遵守对发行人重大影响的法规……
+# 涉及薪酬与解雇、招聘与晋升、工时、休息时间、平等机会、多元、反歧视」一句话能命中
+# 4–5 个关键词，在「按命中数排序」里必然霸榜，把真正写事实的段落（往往只命中 1 个词）挤出去。
+# GRI 内容索引行（403-2、2-19）同理：是指标编号目录，不是证据。
+_NOISE = re.compile(
+    r"significant impact on the issuer"
+    r"|GRI\s*\d{3}"
+    r"|\b\d{3}-\d\b"
+    r"|GRI\s+(?:Content\s+)?Index|GRI\s*內容索引",
+    re.I)
+NOISE_PENALTY = 3          # 命中数越高罚得越多，但不至于清零（真没别的段落时仍可用）
+
+# 同分时的第二排序键：带年份或比例的段落更像「本期已实施」，而不像制度表述。
+# 判据里 100 分要的是执行证据，命中数一样时没理由让「只讲原则」的段落先占席位。
+_FACT = re.compile(r"(?:19|20)\d{2}|[\d.]+\s*[%％]|\d[\d,]*\s*(?:人|人次|天|小時|小时|hours?)", re.I)
 
 
 def recall(doc: Doc, rubric: Rubric, limit: int = RECALL_LIMIT) -> list[Passage]:
-    """按关键词命中数取前 N 段；同分按原文顺序（保证可复现）。"""
-    scored: list[tuple[int, int, int, str]] = []
+    """按关键词命中数取前 N 段；同分时「带年份/比例」的优先，再按原文顺序（保证可复现）。"""
+    scored: list[tuple[int, int, int, int, str]] = []
     seen: set[str] = set()
     for s in sentences(doc):
         low = s.text.lower()
@@ -106,10 +146,13 @@ def recall(doc: Doc, rubric: Rubric, limit: int = RECALL_LIMIT) -> list[Passage]
         if key in seen:                      # 跨页重复的同一段（目录/摘要）只留一次
             continue
         seen.add(key)
-        scored.append((-n, s.page, s.idx, s.text))
+        if _NOISE.search(s.text):            # 套话/索引行降权，别占满 12 个席位
+            n = max(1, n - NOISE_PENALTY)
+        fact = 1 if _FACT.search(s.text) else 0
+        scored.append((-n, -fact, s.page, s.idx, s.text))
     scored.sort()
     return [Passage(idx=i, page=page, text=text, hits=-n)
-            for i, (n, page, _idx, text) in enumerate(scored[:limit], start=1)]
+            for i, (n, _fact, page, _idx, text) in enumerate(scored[:limit], start=1)]
 
 
 # ---------------------------------------------------------------- 2 兜底
@@ -122,7 +165,7 @@ def evidence_levels(text: str) -> set[str]:
     """
     low = text.lower()
     return {level for level in ("result", "system", "statement")
-            if any(w.lower() in low for w in LEVEL_WORDS[level])}
+            if any(_match(low, w) for w in LEVEL_WORDS[level])}
 
 
 def judge_keyword(rubric: Rubric, passages: list[Passage]) -> Verdict:

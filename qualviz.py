@@ -23,41 +23,13 @@ from pathlib import Path
 from openpyxl import Workbook
 from openpyxl.chart import BarChart, Reference
 from openpyxl.formatting.rule import CellIsRule
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.styles import Font, PatternFill          # 条件格式用；样式基元取自 xlstyle
 
 from .rubric import RUBRICS
+from .xlstyle import (BORDER, CEN, F_B, F_BB, F_H, F_N, HEAD, LEF, LIGHT, TIER_FILL,
+                      head, title)
 
-# 档位配色：绿/琥珀/红，与本包其它报告一致
-TIER_FILL = {100: ("FFC6EFCE", "FF006100"), 50: ("FFFFEB9C", "FF9C6500"),
-             0: ("FFFFC7CE", "FF9C0006")}
-HEAD, TITLE, LIGHT = "FF4472C4", "FF2F5597", "FFD9E2F3"
-BD = "FFBFBFBF"
-_thin = Side(style="thin", color=BD)
-BORDER = Border(left=_thin, right=_thin, top=_thin, bottom=_thin)
-F_T = Font(name="微软雅黑", size=13, bold=True, color="FFFFFFFF")
-F_H = Font(name="微软雅黑", size=10, bold=True, color="FFFFFFFF")
-F_B = Font(name="微软雅黑", size=10)
-F_BB = Font(name="微软雅黑", size=10, bold=True)
-F_N = Font(name="微软雅黑", size=9, color="FF595959")
-CEN = Alignment(horizontal="center", vertical="center", wrap_text=True)
-LEF = Alignment(horizontal="left", vertical="top", wrap_text=True)
 SOURCE_CN = {"llm": "LLM 判档", "keyword": "关键词兜底", "gate": "0 分前置条件"}
-
-
-def _title(ws, text: str, ncol: int) -> None:
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncol)
-    c = ws.cell(row=1, column=1, value=text)
-    c.font, c.fill, c.alignment = F_T, PatternFill("solid", start_color=TITLE), CEN
-    ws.row_dimensions[1].height = 30
-
-
-def _head(ws, heads: list[str], widths: list[int], row: int = 2) -> None:
-    for j, (t, w) in enumerate(zip(heads, widths), start=1):
-        c = ws.cell(row=row, column=j, value=t)
-        c.font, c.fill, c.alignment, c.border = F_H, PatternFill(
-            "solid", start_color=HEAD), CEN, BORDER
-        ws.column_dimensions[c.column_letter].width = w
-    ws.row_dimensions[row].height = 30
 
 
 def collect(views, verdicts_by_code: dict) -> list[dict]:
@@ -94,9 +66,9 @@ def write(rows: list[dict], out_path: str | Path, *, year: int, mode: str = "",
     wb = Workbook()
     ws = wb.active
     ws.title = "档位矩阵"
-    _title(ws, f"S1.1 定性判档矩阵（{year}，{len(codes)} 家 × {len(keys)} 项）"
+    title(ws, f"S1.1 定性判档矩阵（{year}，{len(codes)} 家 × {len(keys)} 项）"
                f"　模式={mode or '—'}　模型={model or '—'}", len(codes) + 1)
-    _head(ws, ["评分点"] + codes, [30] + [14] * len(codes))
+    head(ws, 2, ["评分点"] + codes, [30] + [14] * len(codes))
 
     r = 3
     for key in keys:
@@ -128,10 +100,10 @@ def write(rows: list[dict], out_path: str | Path, *, year: int, mode: str = "",
 
     # ---- 判档明细
     ws2 = wb.create_sheet("判档明细")
-    _title(ws2, "逐项判档明细（理由与依据原文，复核看这张）", 11)
-    _head(ws2, ["代码", "公司", "评分点", "档位", "出处", "模型", "脱敏", "召回",
-                "理由", "缺口", "依据原文（首条）"],
-          [8, 20, 26, 7, 12, 11, 7, 7, 46, 46, 60])
+    title(ws2, "逐项判档明细（理由与依据原文，复核看这张）", 11)
+    head(ws2, 2, ["代码", "公司", "评分点", "档位", "出处", "模型", "脱敏", "召回",
+                  "理由", "缺口", "依据原文（首条）"],
+         [8, 20, 26, 7, 12, 11, 7, 7, 46, 46, 60])
     r = 3
     for row in sorted(rows, key=lambda x: (x["code"], keys.index(x["key"]))):
         ev = row["evidence"][0] if row["evidence"] else ""
@@ -156,7 +128,7 @@ def write(rows: list[dict], out_path: str | Path, *, year: int, mode: str = "",
 
     # ---- 档位图（原生图表，不引绘图库）
     ws3 = wb.create_sheet("档位图")
-    _title(ws3, "定性档位分布（柱高＝档位分，绿/黄/红同矩阵）", 8)
+    title(ws3, "定性档位分布（柱高＝档位分，绿/黄/红同矩阵）", 8)
     chart = BarChart()
     chart.type, chart.style, chart.grouping = "col", 10, "clustered"
     chart.title = "各评分点档位（按公司）"
@@ -199,7 +171,7 @@ def write(rows: list[dict], out_path: str | Path, *, year: int, mode: str = "",
 
     # ---- 口径与台账
     ws4 = wb.create_sheet("口径与台账")
-    _title(ws4, "判档口径与运行台账", 2)
+    title(ws4, "判档口径与运行台账", 2)
     ws4.column_dimensions["A"].width = 24
     ws4.column_dimensions["B"].width = 104
     meta = [("报告年度", year), ("判档模式", mode or "—"), ("模型", model or "—"),

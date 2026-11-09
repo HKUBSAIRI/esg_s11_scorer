@@ -44,6 +44,14 @@ ENV_PREFIX = "ESG_"
 DEFAULT_YEAR = 2025
 BENCH_MODES = ("auto", "csv", "none")
 
+# 外部资源（MySQL / GPU 服务器）的默认与可选值。打分链路**不消费**这两组配置，
+# 它们只是把「同一份凭据」留在配置层：以后加一个入库阶段或拉语料的脚本时，
+# 不必再到脚本里硬编码 host / 密码（20-脚本、21-探针 里已有几十处这样的硬编码）。
+DEFAULT_DB_PORT = 3306
+DEFAULT_DB_CHARSET = "utf8mb4"
+DEFAULT_GPU_PORT = 22
+GPU_ACCOUNT_NAMES = ("kyrie", "zixin")
+
 PKG_DIR = Path(__file__).resolve().parent
 # config.py 原先的算法：esg_s11_scorer/config.py → parents[1]（50-应用）→ .parent
 DEFAULT_PROJECT_ROOT = PKG_DIR.parents[1]
@@ -71,9 +79,13 @@ def parse_env_file(path: str | Path) -> dict[str, str]:
 
 
 def _mask(secret: str) -> str:
-    """密钥掩码：只留前缀与长度，够判断「配的是哪把钥匙」，不足以复原。"""
-    head = secret[:6]
-    return f"{head}…共 {len(secret)} 位"
+    """密钥掩码：只留前缀与长度，够判断「配的是哪把钥匙」，不足以复原。
+
+    短口令（≤12 位）连前缀都不露——``45176_`` 这种 6 位前缀已经是大半个密码了。
+    """
+    if len(secret) <= 12:
+        return f"…共 {len(secret)} 位"
+    return f"{secret[:6]}…共 {len(secret)} 位"
 
 
 def _clean_value(raw: str) -> str:
@@ -119,10 +131,13 @@ class _Layers:
             return self.file_vals[name].strip(), f"{where} → {name}"
         return None, "默认"
 
-    def path(self, name: str, default: Path, base: Path) -> tuple[Path, str]:
+    def path(self, name: str, default: Path, base: Path,
+             year: int | None = None) -> tuple[Path, str]:
         raw, src = self.raw(name)
         if raw is None:
             return default, src
+        if year is not None:
+            raw = expand_year(raw, year)
         return to_path(raw, base), src
 
 
@@ -131,6 +146,22 @@ def to_path(raw: str, base: Path) -> Path:
     if not p.is_absolute():
         p = base / p
     return Path(os.path.normpath(p))
+
+
+def expand_year(raw: str, year: int) -> str:
+    """把路径里的 ``{year}`` / ``{year-1}`` 换成实际年度。
+
+    为什么值得一个函数：``.../overrides_FY{year}.csv`` 这样写，明年只改 ``ESG_YEAR``，
+    兜底表、上期目录、输出子目录会自动跟着走。写死 ``FY2025`` 的后果不是报错，而是
+    **静默串档**——今年的批次套用去年的人工值，报告看着正常、数是错的。
+    """
+    if "{" not in raw:
+        return raw
+    out = raw
+    for delta in (0, -1, 1):
+        token = "{year}" if delta == 0 else f"{{year{delta:+d}}}"
+        out = out.replace(token, str(year + delta))
+    return out
 
 
 # ---------------------------------------------------------------- 配置对象
@@ -146,6 +177,7 @@ class Settings:
     report_root: Path
     insight_app: Path
     standard_doc: Path
+    keywords_csv: Path
     prior_dir: Path | None = None
     bench_mode: str = "auto"
     bench_csv: Path | None = None
@@ -157,6 +189,22 @@ class Settings:
     llm_model: str = ""
     llm_api_key: str = ""
     llm_thinking: bool = False
+    # 外部资源：MySQL（备用，打分链路不读）与 GPU 服务器账号（同上）
+    db_host: str = ""
+    db_port: int = DEFAULT_DB_PORT
+    db_user: str = ""
+    db_password: str = ""
+    db_name: str = ""
+    db_charset: str = DEFAULT_DB_CHARSET
+    gpu_host: str = ""
+    gpu_port: int = DEFAULT_GPU_PORT
+    gpu_default: str = ""
+    gpu_kyrie_user: str = ""
+    gpu_kyrie_password: str = ""
+    gpu_kyrie_dir: str = ""
+    gpu_zixin_user: str = ""
+    gpu_zixin_password: str = ""
+    gpu_zixin_dir: str = ""
     env_file: Path | None = None
     sources: Mapping[str, str] = field(default_factory=dict)
     warnings: tuple[str, ...] = ()
@@ -172,16 +220,32 @@ class Settings:
         ("ESG_REPORT_ROOT", "report_root", "dir"),
         ("ESG_INSIGHT_APP", "insight_app", "dir"),
         ("ESG_STANDARD_DOC", "standard_doc", "file"),
+        ("ESG_S11_KEYWORDS", "keywords_csv", "file"),
         ("ESG_BENCH", "bench_mode", "text"),
         ("ESG_BENCH_CSV", "bench_csv", "file"),
-        ("ESG_OVERRIDE_CSV", "override_csv", "file"),
-        ("ESG_ALIAS_CSV", "alias_csv", "file"),
+        ("ESG_OVERRIDE_CSV", "override_csv", "file?"),
+        ("ESG_ALIAS_CSV", "alias_csv", "file?"),
         ("ESG_SAMPLE_PDF_DIR", "sample_pdf_dir", "dir"),
         ("ESG_VERDICTS", "verdicts", "file"),
         ("ESG_LLM_BASE_URL", "llm_base_url", "text"),
         ("ESG_LLM_MODEL", "llm_model", "text"),
         ("ESG_LLM_THINKING", "llm_thinking", "text"),
         ("ESG_LLM_API_KEY", "llm_api_key", "secret"),
+        ("ESG_DB_HOST", "db_host", "text"),
+        ("ESG_DB_PORT", "db_port", "text"),
+        ("ESG_DB_USER", "db_user", "text"),
+        ("ESG_DB_PASSWORD", "db_password", "secret"),
+        ("ESG_DB_NAME", "db_name", "text"),
+        ("ESG_DB_CHARSET", "db_charset", "text"),
+        ("ESG_GPU_HOST", "gpu_host", "text"),
+        ("ESG_GPU_PORT", "gpu_port", "text"),
+        ("ESG_GPU_DEFAULT", "gpu_default", "text"),
+        ("ESG_GPU_KYRIE_USER", "gpu_kyrie_user", "text"),
+        ("ESG_GPU_KYRIE_PASSWORD", "gpu_kyrie_password", "secret"),
+        ("ESG_GPU_KYRIE_DIR", "gpu_kyrie_dir", "text"),
+        ("ESG_GPU_ZIXIN_USER", "gpu_zixin_user", "text"),
+        ("ESG_GPU_ZIXIN_PASSWORD", "gpu_zixin_password", "secret"),
+        ("ESG_GPU_ZIXIN_DIR", "gpu_zixin_dir", "text"),
     )
 
     def rows(self) -> list[tuple[str, str, str, str]]:
@@ -200,6 +264,11 @@ class Settings:
                 state = "—"
             elif kind == "text":
                 text, state = str(val), "—"
+            elif kind == "file?":
+                # 「可选文件」：配了就该落在说好的位置，但今年没有是正常的，
+                # 所以只报在不在，不当错误（兜底表、别名表都属于这种）。
+                p = Path(val)
+                text, state = str(p), ("存在" if p.exists() else "不存在（可选）")
             else:
                 p = Path(val)
                 text = str(p)
@@ -216,12 +285,46 @@ class Settings:
         """「配了但路径不存在」的清单 —— 直接点名该修哪个变量。"""
         msgs: list[str] = []
         for name, attr, kind in self._FIELDS:
-            if kind in ("text", "secret") or attr in ("out_dir", "build_dir"):
-                continue  # 文本项无路径可言；输出/落地目录不存在属正常，运行时创建
+            if kind in ("text", "secret", "file?") or attr in ("out_dir", "build_dir"):
+                continue  # 文本项无路径可言；可选文件不存在属正常；输出/落地目录运行时创建
             val = getattr(self, attr)
             if val is not None and not Path(val).exists():
                 msgs.append(f"{name} 指向的路径不存在：{val}")
         return msgs
+
+    # -- 外部资源：MySQL / GPU 服务器 -------------------------------------
+    @property
+    def db_ready(self) -> bool:
+        """四项（host/user/password/name）齐备才算可用；端口与字符集有默认值。"""
+        return bool(self.db_host and self.db_user and self.db_password and self.db_name)
+
+    def db_params(self) -> dict:
+        """直接喂给 ``pymysql.connect(**params)``；没配齐就抛错，不猜默认库。"""
+        if not self.db_ready:
+            raise ValueError("MySQL 未配置齐：需要 ESG_DB_HOST / _USER / _PASSWORD / _NAME")
+        return {"host": self.db_host, "port": self.db_port, "user": self.db_user,
+                "password": self.db_password, "database": self.db_name,
+                "charset": self.db_charset or DEFAULT_DB_CHARSET}
+
+    def gpu_account_names(self) -> tuple[str, ...]:
+        """``ESG_GPU_*_USER`` 里填了用户名的那几个账号（按固定顺序）。"""
+        return tuple(n for n in GPU_ACCOUNT_NAMES if getattr(self, f"gpu_{n}_user"))
+
+    def gpu_account(self, name: str | None = None) -> dict:
+        """某台 GPU 账号的 ssh 参数；``name`` 缺省取 ``ESG_GPU_DEFAULT``。
+
+        返回的键与 ``gpu_ssh.py`` 的用法对齐（host/port/username/password/dir），
+        但本包只负责取值，不负责连接——连接库（paramiko）不是本包依赖。
+        """
+        who = (name or self.gpu_default or "").strip().lower()
+        if who not in GPU_ACCOUNT_NAMES:
+            raise ValueError(f"未知 GPU 账号 {who!r}，可选 {GPU_ACCOUNT_NAMES}")
+        user = getattr(self, f"gpu_{who}_user")
+        if not user:
+            raise ValueError(f"ESG_GPU_{who.upper()}_USER 未配置")
+        return {"host": self.gpu_host, "port": self.gpu_port, "username": user,
+                "password": getattr(self, f"gpu_{who}_password"),
+                "dir": getattr(self, f"gpu_{who}_dir")}
 
 
 # ---------------------------------------------------------------- 装配
@@ -248,34 +351,53 @@ def build(env_file: str | Path | None = None) -> Settings:
 
     app_dir = root / "50-应用"
     report_root, src = lay.path("ESG_REPORT_ROOT",
-                                app_dir / "good_sample" / "分析指标" / "ESG报告", base=root)
+                                app_dir / "good_sample" / "分析指标" / "ESG报告", base=root,
+                                year=year)
     sources["ESG_REPORT_ROOT"] = src
 
     # 不写 ESG_PDF_DIR 时：默认吃「报告根/FY{year}」，这样 ESG_YEAR 一改，输入跟着改
-    pdf_dir, src = lay.path("ESG_PDF_DIR", report_root / f"FY{year}", base=root)
+    pdf_dir, src = lay.path("ESG_PDF_DIR", report_root / f"FY{year}", base=root, year=year)
     sources["ESG_PDF_DIR"] = src if src != "默认" else f"默认（ESG_REPORT_ROOT/FY{year}）"
 
     # 不写 ESG_PRIOR_DIR 时留 None：pipeline 会自己找 ESG_PDF_DIR 同级的 FY{year-1}
     raw_prior, src_prior = lay.raw("ESG_PRIOR_DIR")
-    prior_dir = to_path(raw_prior, root) if raw_prior else None
+    prior_dir = to_path(expand_year(raw_prior, year), root) if raw_prior else None
     sources["ESG_PRIOR_DIR"] = src_prior if raw_prior else "自动（PDF 同级 FY{year-1}）"
 
     out_dir, src = lay.path("ESG_OUT_DIR",
-                            app_dir / "good_sample" / "分析指标" / "打分结果", base=root)
+                            app_dir / "good_sample" / "分析指标" / "打分结果", base=root,
+                            year=year)
     sources["ESG_OUT_DIR"] = src
 
     # 管道中间态（阶段产物 + 表）。默认放包内 build/（.gitignore 已排除），
     # 与 out_dir（给人看的 xlsx）分开：一个是可再生的工作区，一个是交付物。
-    build_dir, src = lay.path("ESG_BUILD_DIR", PKG_DIR / "build", base=root)
+    build_dir, src = lay.path("ESG_BUILD_DIR", PKG_DIR / "build", base=root, year=year)
     sources["ESG_BUILD_DIR"] = src
 
-    insight_app, src = lay.path("ESG_INSIGHT_APP", app_dir / "ESG_insight" / "app", base=root)
+    insight_app, src = lay.path("ESG_INSIGHT_APP", app_dir / "ESG_insight" / "app", base=root,
+                                year=year)
     sources["ESG_INSIGHT_APP"] = src
 
     standard_doc, src = lay.path("ESG_STANDARD_DOC",
                                  app_dir / "sample" / "02-指标标准" / "S1.1_指标与判断标准.md",
-                                 base=root)
+                                 base=root, year=year)
     sources["ESG_STANDARD_DOC"] = src
+
+    # 定性召回词表：默认用包内那份（可直接用 Excel 编辑）；换项目/换口径时指到另一个 CSV
+    keywords_csv, src = lay.path("ESG_S11_KEYWORDS", PKG_DIR / "keywords.csv", base=root,
+                                 year=year)
+    sources["ESG_S11_KEYWORDS"] = src
+
+    # 年度和目录名对不上，是最典型也最隐蔽的串档：改了 ESG_YEAR，路径还指着去年。
+    # 这里只警告不拦（临时用去年的目录做对照是合法用法），但要让人看见。
+    for _name, _path, _expect in (("ESG_PDF_DIR", pdf_dir, year),
+                                  ("ESG_PRIOR_DIR", prior_dir, year - 1)):
+        if _path is None:
+            continue
+        _m = re.search(r"FY(\d{4})", Path(_path).name)
+        if _m and int(_m.group(1)) != _expect:
+            warnings.append(f"{_name} 指向 {Path(_path).name}，按 ESG_YEAR={year} 应为 "
+                            f"FY{_expect}：疑似串档（或用 {{year}} 占位符让它自动跟随）")
 
     bench_mode = "auto"
     raw_bench, src = lay.raw("ESG_BENCH")
@@ -288,24 +410,26 @@ def build(env_file: str | Path | None = None) -> Settings:
             sources["ESG_BENCH"] = "无效值，回退 auto"
 
     raw_csv, src = lay.raw("ESG_BENCH_CSV")
-    bench_csv = to_path(raw_csv, root) if raw_csv else None
+    bench_csv = to_path(expand_year(raw_csv, year), root) if raw_csv else None
     sources["ESG_BENCH_CSV"] = src if raw_csv else "默认（不读外部对标表）"
 
+    # 兜底表 / 别名表带年度：不写就留 None（不读），写了就让 {year} 跟着年度走。
+    # 这两个文件常「今年还没有」，所以状态里只报「不存在（可选）」，不当错误。
     raw_ovr, src = lay.raw("ESG_OVERRIDE_CSV")
-    override_csv = to_path(raw_ovr, root) if raw_ovr else None
+    override_csv = to_path(expand_year(raw_ovr, year), root) if raw_ovr else None
     sources["ESG_OVERRIDE_CSV"] = src if raw_ovr else "默认（不读人工兜底表）"
 
     raw_alias, src = lay.raw("ESG_ALIAS_CSV")
-    alias_csv = to_path(raw_alias, root) if raw_alias else None
+    alias_csv = to_path(expand_year(raw_alias, year), root) if raw_alias else None
     sources["ESG_ALIAS_CSV"] = src if raw_alias else "默认（只用文件名与股票代码脱敏）"
 
     raw_sample, src = lay.raw("ESG_SAMPLE_PDF_DIR")
-    sample_pdf_dir = (to_path(raw_sample, root) if raw_sample
+    sample_pdf_dir = (to_path(expand_year(raw_sample, year), root) if raw_sample
                       else app_dir / "sample" / "01-源PDF")
     sources["ESG_SAMPLE_PDF_DIR"] = src
 
     raw_verd, src = lay.raw("ESG_VERDICTS")
-    verdicts = (to_path(raw_verd, root) if raw_verd
+    verdicts = (to_path(expand_year(raw_verd, year), root) if raw_verd
                 else app_dir / "sample" / "04-脚本与索引" / "verdicts.py")
     sources["ESG_VERDICTS"] = src
 
@@ -324,15 +448,68 @@ def build(env_file: str | Path | None = None) -> Settings:
         warnings.append("配了 ESG_LLM_BASE_URL / ESG_LLM_MODEL 但缺 ESG_LLM_API_KEY，"
                         "定性判档将退回关键词兜底")
 
+    # 外部资源：只做「取值 + 自检」，不连网。缺项不算错（打分链路用不到），
+    # 但半配（比如给了 host 忘了库名）要出声——否则将来第一次连库才发现少一项。
+    def text(name: str) -> str:
+        val, src = lay.raw(name)
+        sources[name] = src if val else "默认（未配置）"
+        return val or ""
+
+    def number(name: str, default: int) -> int:
+        raw, src = lay.raw(name)
+        if not raw:
+            sources[name] = "默认"
+            return default
+        try:
+            sources[name] = src
+            return int(raw)
+        except ValueError:
+            warnings.append(f"{name}={raw!r} 不是整数，已回退 {default}")
+            sources[name] = f"无效值，回退 {default}"
+            return default
+
+    db_host = text("ESG_DB_HOST")
+    db_port = number("ESG_DB_PORT", DEFAULT_DB_PORT)
+    db_user = text("ESG_DB_USER")
+    db_password = text("ESG_DB_PASSWORD")
+    db_name = text("ESG_DB_NAME")
+    db_charset = text("ESG_DB_CHARSET") or DEFAULT_DB_CHARSET
+    given = [v for v in (db_host, db_user, db_password, db_name) if v]
+    if given and len(given) < 4:
+        warnings.append("MySQL 配置不完整：ESG_DB_HOST / _USER / _PASSWORD / _NAME 需同时给，"
+                        "否则 db_params() 会拒绝连接")
+
+    gpu_host = text("ESG_GPU_HOST")
+    gpu_port = number("ESG_GPU_PORT", DEFAULT_GPU_PORT)
+    gpu_default = text("ESG_GPU_DEFAULT").strip().lower()
+    if gpu_default and gpu_default not in GPU_ACCOUNT_NAMES:
+        warnings.append(f"ESG_GPU_DEFAULT={gpu_default!r} 不在 {GPU_ACCOUNT_NAMES}，已忽略")
+        gpu_default = ""
+    gpu_kyrie_user = text("ESG_GPU_KYRIE_USER")
+    gpu_kyrie_password = text("ESG_GPU_KYRIE_PASSWORD")
+    gpu_kyrie_dir = text("ESG_GPU_KYRIE_DIR")
+    gpu_zixin_user = text("ESG_GPU_ZIXIN_USER")
+    gpu_zixin_password = text("ESG_GPU_ZIXIN_PASSWORD")
+    gpu_zixin_dir = text("ESG_GPU_ZIXIN_DIR")
+    if (gpu_kyrie_user or gpu_zixin_user) and not gpu_host:
+        warnings.append("配了 GPU 账号但缺 ESG_GPU_HOST，gpu_account() 拿不到连接地址")
+
     return Settings(
         year=year, project_root=root, pdf_dir=pdf_dir, out_dir=out_dir,
         build_dir=build_dir,
         report_root=report_root, insight_app=insight_app, standard_doc=standard_doc,
+        keywords_csv=keywords_csv,
         prior_dir=prior_dir, bench_mode=bench_mode, bench_csv=bench_csv,
         override_csv=override_csv, sample_pdf_dir=sample_pdf_dir, verdicts=verdicts,
         alias_csv=alias_csv,
         llm_base_url=llm_base_url, llm_model=llm_model, llm_api_key=llm_api_key,
         llm_thinking=llm_thinking,
+        db_host=db_host, db_port=db_port, db_user=db_user, db_password=db_password,
+        db_name=db_name, db_charset=db_charset,
+        gpu_host=gpu_host, gpu_port=gpu_port, gpu_default=gpu_default,
+        gpu_kyrie_user=gpu_kyrie_user, gpu_kyrie_password=gpu_kyrie_password,
+        gpu_kyrie_dir=gpu_kyrie_dir, gpu_zixin_user=gpu_zixin_user,
+        gpu_zixin_password=gpu_zixin_password, gpu_zixin_dir=gpu_zixin_dir,
         env_file=env_path, sources=sources, warnings=tuple(warnings))
 
 
@@ -380,6 +557,7 @@ def iter_env_names() -> Iterator[str]:
 
 __all__ = [
     "ENV_PREFIX", "DEFAULT_YEAR", "BENCH_MODES", "PKG_DIR", "DEFAULT_PROJECT_ROOT",
-    "Settings", "parse_env_file", "locate_env_file", "to_path",
+    "DEFAULT_DB_PORT", "DEFAULT_DB_CHARSET", "DEFAULT_GPU_PORT", "GPU_ACCOUNT_NAMES",
+    "Settings", "parse_env_file", "locate_env_file", "to_path", "expand_year",
     "build", "configure", "get_settings", "reload", "iter_env_names",
 ]

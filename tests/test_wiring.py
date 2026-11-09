@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 """定性判档 → 记分卡的接线测试（**不联网**）。
 
-接进打分链路的关键约束只有一条：**判档结论必须原样变成分数**，中途不能被要素逻辑
-覆盖或二次解释。这里用构造的 ``Verdict`` 直接调 ``build_card``，把两条路径都钉住：
+接进打分链路的关键约束只有两条：
 
-- 给了 verdict → C 项 / 三档制指标的分 = 判档档位（哪怕是 0 或 100）；
-- 没给 verdict → 仍走 29 要素老路径（``--qualitative element`` 必须还能复现旧分）。
+1. **判档结论必须原样变成分数**：C 项与三档制指标的分 = 判档档位（哪怕是 0 或 100），
+   中途不能被任何二次解释改掉。
+2. **判档缺一不可**：没有词法兜底路径，少给一项就该抛错，
+   而不是悄悄拼一个「看着正常、口径却过期」的数。
 """
 from __future__ import annotations
 
@@ -34,15 +35,24 @@ def _v(key: str, tier: int, source: str = "llm") -> Verdict:
                    evidence=[f"[p1] {key} 的证据原文"], source=source)
 
 
+def _all(**over) -> dict[str, Verdict]:
+    """五项判档的默认桩（都是 50 分），用 ``over`` 覆盖关心的那一项。"""
+    base = {"S1.1.1-C": _v("S1.1.1-C", 50), "S1.1.2-C": _v("S1.1.2-C", 50),
+            "S1.1.3": _v("S1.1.3", 50), "S1.1.4": _v("S1.1.4", 50),
+            "S1.1.5": _v("S1.1.5", 50)}
+    base.update(over)
+    return base
+
+
 NO_BENCH = Bench(kind="none", note="测试：无对标池")
 
 
 class TestVerdictDrivesScore(unittest.TestCase):
     def test_tiered_indicators_take_verdict_tier(self):
-        card = build_card("X", "测试", 2025, "x.pdf", {}, _data(), NO_BENCH, True,
-                          verdicts={"S1.1.3": _v("S1.1.3", 50),
-                                    "S1.1.4": _v("S1.1.4", 100),
-                                    "S1.1.5": _v("S1.1.5", 0)})
+        card = build_card("X", "测试", 2025, "x.pdf", _data(), NO_BENCH,
+                          verdicts=_all(**{"S1.1.3": _v("S1.1.3", 50),
+                                           "S1.1.4": _v("S1.1.4", 100),
+                                           "S1.1.5": _v("S1.1.5", 0)}))
         self.assertEqual(card.indicators["S1.1.3"].raw, 50)
         self.assertEqual(card.indicators["S1.1.4"].raw, 100)
         self.assertEqual(card.indicators["S1.1.5"].raw, 0)
@@ -50,9 +60,9 @@ class TestVerdictDrivesScore(unittest.TestCase):
             self.assertEqual(card.indicators[k].strict, float(card.indicators[k].raw))
 
     def test_weighted_c_takes_verdict_tier(self):
-        card = build_card("X", "测试", 2025, "x.pdf", {}, _data(), NO_BENCH, True,
-                          verdicts={"S1.1.1-C": _v("S1.1.1-C", 50),
-                                    "S1.1.2-C": _v("S1.1.2-C", 100)})
+        card = build_card("X", "测试", 2025, "x.pdf", _data(), NO_BENCH,
+                          verdicts=_all(**{"S1.1.1-C": _v("S1.1.1-C", 50),
+                                           "S1.1.2-C": _v("S1.1.2-C", 100)}))
         s111 = card.indicators["S1.1.1"]
         c = next(x for x in s111.components if x.key == "C")
         self.assertEqual(c.score, 50)
@@ -63,36 +73,37 @@ class TestVerdictDrivesScore(unittest.TestCase):
         self.assertEqual(c2.score, 100)
 
     def test_weighted_total_is_formula(self):
-        card = build_card("X", "测试", 2025, "x.pdf", {}, _data(), NO_BENCH, True,
-                          verdicts={"S1.1.1-C": _v("S1.1.1-C", 100),
-                                    "S1.1.2-C": _v("S1.1.2-C", 100)})
+        card = build_card("X", "测试", 2025, "x.pdf", _data(), NO_BENCH,
+                          verdicts=_all(**{"S1.1.1-C": _v("S1.1.1-C", 100),
+                                           "S1.1.2-C": _v("S1.1.2-C", 100)}))
         # A 无对标池 → N/A；B 为改善方向 → 100；C=100 → 0.3*100+0.3*100 = 60
         self.assertEqual(card.indicators["S1.1.1"].strict, 60.0)
         # A=50（差距 5%）、B=100（改善 16.7%）、C=100 → 20+30+30 = 80
         self.assertEqual(card.indicators["S1.1.2"].strict, 80.0)
 
-    def test_no_verdict_keeps_element_path(self):
-        """不给 verdict 时必须回到要素逻辑（否则 element 模式就没法复现旧分）。"""
-        card = build_card("X", "测试", 2025, "x.pdf", {}, _data(), NO_BENCH, True)
-        self.assertEqual(card.indicators["S1.1.3"].raw, 0, "无要素 → 老路径判 0")
-        self.assertEqual(card.indicators["S1.1.4"].raw, 0)
-        self.assertEqual(card.indicators["S1.1.5"].raw, 0)
-        c = next(x for x in card.indicators["S1.1.1"].components if x.key == "C")
-        # 老路径的已知行为：只要披露了自愿离职构成（has_vol）就给 50，不看合同/终止制度。
-        # 这正是新链路要替掉它的原因之一；这里把行为钉住，改老路径时测试会红。
-        self.assertEqual(c.score, 50, "披露自愿离职构成但无任何制度 → 老路径给 50")
-
-    def test_no_verdict_without_voluntary_is_zero(self):
-        card = build_card("X", "测试", 2025, "x.pdf", {}, _data(), NO_BENCH, False)
-        c = next(x for x in card.indicators["S1.1.1"].components if x.key == "C")
-        self.assertEqual(c.score, 0)
-
     def test_gate_source_is_recorded(self):
-        card = build_card("X", "测试", 2025, "x.pdf", {}, _data(), NO_BENCH, True,
-                          verdicts={"S1.1.1-C": _v("S1.1.1-C", 0, source="gate")})
+        card = build_card("X", "测试", 2025, "x.pdf", _data(), NO_BENCH,
+                          verdicts=_all(**{"S1.1.1-C": _v("S1.1.1-C", 0, source="gate")}))
         c = next(x for x in card.indicators["S1.1.1"].components if x.key == "C")
         self.assertEqual(c.score, 0)
         self.assertIn("0 分前置条件", c.note)
+
+
+class TestMissingVerdictIsFatal(unittest.TestCase):
+    """缺判档必须报错，且错误信息要指得动人。"""
+
+    def test_missing_verdict_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            build_card("X", "测试", 2025, "x.pdf", _data(), NO_BENCH,
+                       verdicts={"S1.1.3": _v("S1.1.3", 50)})
+        msg = str(ctx.exception)
+        self.assertIn("X", msg, "错误里要点名是哪家公司")
+        self.assertIn("S1.1.1-C", msg, "要列出缺哪几项")
+        self.assertIn("--qualitative", msg, "要说明该换哪种模式重跑")
+
+    def test_empty_verdicts_raises(self):
+        with self.assertRaises(ValueError):
+            build_card("X", "测试", 2025, "x.pdf", _data(), NO_BENCH, verdicts={})
 
 
 if __name__ == "__main__":

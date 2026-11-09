@@ -7,14 +7,14 @@
 ``extract``，导致「报告层要从编排层 import 一个 dataclass」这种反向依赖。集中到本模块后，
 依赖关系变成：
 
-    models  ←  extract / judge_plus / bench / scoring / pipeline / report / calibrate
+    models  ←  extract / bench / scoring / pipeline / report / calibrate
 
 即所有层都只依赖 models，彼此之间不再为了「借一个数据结构」而互相 import。
 
 约定
 ----
 - 本模块**不 import 本包任何模块**（除 typing），因此永不参与循环依赖。
-- 外部类型（``Doc`` / ``ElementResult``）只在类型检查时引入，运行时不产生耦合。
+- 外部类型（``Doc``）只在类型检查时引入，运行时不产生耦合。
 - 派生属性（如 ``IndScore.strict``）必须是纯函数，不得有副作用。
 """
 from __future__ import annotations
@@ -24,7 +24,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:                                   # 仅类型检查，运行时不 import
-    from s11_judge import ElementResult
     from s11_text import Doc
 
 NA = None
@@ -112,86 +111,6 @@ class Extraction:
                 if f.year is not None:
                     ex.best.setdefault(f.field, {}).setdefault(f.year, f)
         return ex
-
-
-# ---------------------------------------------------------------- 判定补丁
-@dataclass
-class Patch:
-    """增强层对词法判定的一次覆盖，留痕用（谁、从什么改成什么、为什么）。"""
-    eid: str
-    name: str
-    before: str
-    after: str
-    reason: str
-
-    def to_dict(self) -> dict:
-        return {"eid": self.eid, "name": self.name, "before": self.before,
-                "after": self.after, "reason": self.reason}
-
-    @classmethod
-    def from_dict(cls, d: dict) -> "Patch":
-        return cls(eid=str(d.get("eid") or ""), name=str(d.get("name") or ""),
-                   before=str(d.get("before") or ""), after=str(d.get("after") or ""),
-                   reason=str(d.get("reason") or ""))
-
-
-# ---------------------------------------------------------------- 要素判定
-def render_quote(page: int, sent: str, suspect: bool = False) -> str:
-    """证据句的展示格式（唯一实现）。
-
-    改造前这段在 ``ElementResult.top_quote()`` 里，属于 ESG_insight 仓库；落地成产物后
-    证据句必须能独立存活（不能依赖上游对象），所以在这里固定下来。两边格式必须一致，
-    否则「内存跑出的报告」和「读表跑出的报告」会给出不同的证据串。
-    """
-    text = sent if len(sent) <= 220 else sent[:220] + "…"
-    return f"[p{page}] {text}{'（证据可疑）' if suspect else ''}"
-
-
-@dataclass
-class ElementJudgement:
-    """一个 29 要素判定的可落地形态（``s11_judge.ElementResult`` 的稳定快照）。
-
-    为什么转成自有类型
-    ------------------
-    下游（打分层、报告层、表）只要 ``verdict`` / ``name`` / ``reason`` / 证据句，不需要
-    ``hits`` 这种上游内部结构。转完之后产物里存的是**已渲染好的证据串**，重建时不再
-    import ``s11_judge``——判定层换了实现，历史产物依然读得出来。
-    """
-    eid: str
-    ind: str
-    name: str
-    verdict: str
-    reason: str = ""
-    confidence: float = 0.0
-    quotes: list[str] = field(default_factory=list)
-    doubt: bool = False              # 全部证据句都没有人员词 → 证据可疑（只提示，不影响判定）
-
-    def top_quote(self, n: int = 1) -> str:
-        return self.quotes[n - 1] if len(self.quotes) >= n else ""
-
-    def to_dict(self) -> dict:
-        return {"eid": self.eid, "ind": self.ind, "name": self.name,
-                "verdict": self.verdict, "reason": self.reason,
-                "confidence": self.confidence, "quotes": list(self.quotes),
-                "doubt": self.doubt}
-
-    @classmethod
-    def from_dict(cls, d: dict) -> "ElementJudgement":
-        return cls(eid=str(d.get("eid") or ""), ind=str(d.get("ind") or ""),
-                   name=str(d.get("name") or ""), verdict=str(d.get("verdict") or "否"),
-                   reason=str(d.get("reason") or ""),
-                   confidence=float(d.get("confidence") or 0.0),
-                   quotes=[str(q) for q in (d.get("quotes") or [])],
-                   doubt=bool(d.get("doubt")))
-
-    @classmethod
-    def from_result(cls, r) -> "ElementJudgement":
-        """从 ``s11_judge.ElementResult`` 转换（唯一接触上游类型的入口）。"""
-        return cls(eid=r.eid, ind=getattr(r, "ind", ""), name=r.name,
-                   verdict=r.verdict, reason=r.reason,
-                   confidence=float(getattr(r, "confidence", 0.0) or 0.0),
-                   quotes=[render_quote(h.page, h.sent, h.suspect) for h in r.hits],
-                   doubt=bool(getattr(r, "doubt", False)))
 
 
 # ---------------------------------------------------------------- 打分
@@ -368,9 +287,6 @@ class CompanyRun:
     pdf: Path
     doc: "Doc | None" = None
     ex: Extraction | None = None
-    res: dict[str, "ElementJudgement"] = field(default_factory=dict)
-    patches: list[Patch] = field(default_factory=list)
-    has_voluntary: bool = False          # 是否披露自愿离职口径（判定阶段产出，打分要用）
     card: ScoreCard | None = None
     status: str = "ok"
     error: str = ""
@@ -408,8 +324,6 @@ class CompanyView:
     file: str
     card: ScoreCard
     facts: list[NumFact] = field(default_factory=list)
-    elements: dict[str, ElementJudgement] = field(default_factory=dict)
-    patches: list[Patch] = field(default_factory=list)
     pct_a: float | None = None          # 流失率分位（低者优）
     pct_b: float | None = None          # 改善率分位（高者优）
     band_a: int | None = None

@@ -1,18 +1,18 @@
 # -*- coding: utf-8 -*-
-"""打分层：要素判定 + 数值 → 五项指标分（含分项、档位、可达上限、缺口说明）。
+"""打分层：定性判档 + 数值 → 五项指标分（含分项、档位、可达上限、缺口说明）。
 
 三条口径约定（改动须同步 ``MODEL_VERSION``）
 ------------------------------------------------------------------------
 1. **N/A ≠ 0**：分项不可评时记 ``None``，同时给出「严格（N/A 按 0 计）」与
    「归一（按可观测权重折算）」两个数，并标明可达上限。只看一个数必然误读。
-2. **C 项要「制度」不是「提到了」**：S1.1.1 的 C 与 S1.1.2 的 C，100 分档要求
-   「建立明确的…制度」，故只有要素判「是」才算建成；「部分」只能到 50。
+2. **判档结论是必填项**：C 项与 S1.1.3/4/5 一律取 ``Verdict``（LLM 或关键词）。
+   缺判档就抛错——静默拼分只会产出与交付物不一致的数。
 3. **A/B 分位优先用对标池**：有对标池 → 按同业分位取档；无对标池 → A 记 N/A，
    B 退化为「改善率方向」（与 10 份样本专家口径一致，便于横向比较）。
+
+本模块只做算术：输入是抽取到的数值与判档结论，输出是分数。不再有词法判定层。
 """
 from __future__ import annotations
-
-from s11_judge import ElementResult
 
 from .bench import Bench
 from .config import (GAP_B_FLOOR, GAP_BANDS, GAP_IMPROVE_FULL, GAP_NEAR_ZERO,
@@ -20,22 +20,25 @@ from .config import (GAP_B_FLOOR, GAP_BANDS, GAP_IMPROVE_FULL, GAP_NEAR_ZERO,
 from .metrics import improvement
 from .models import Component, IndScore, ScoreCard, ScoreData
 from .qualitative import Verdict
+from .rubric import QUALITATIVE_PARTS
 
 
-def _v(res: dict[str, ElementResult], eid: str) -> str:
-    r = res.get(eid)
-    return r.verdict if r else "否"
-
-
-def _ev(res: dict[str, ElementResult], eid: str) -> str:
-    r = res.get(eid)
-    return r.top_quote() if r else ""
+# 打分必须拿到的判档键（S1.1.1-C / S1.1.2-C / S1.1.3 / S1.1.4 / S1.1.5）
+REQUIRED_VERDICTS = tuple(k for keys in QUALITATIVE_PARTS.values() for k in keys)
 
 
 def _verdict_note(v: Verdict) -> str:
-    """判档结论在报告里的说明：档位 + 理由 + 出处（llm/keyword/gate）。"""
+    """判档结论在报告里的说明：档位 + 理由 + 出处（llm/keyword/gate）。
+
+    兜底理由本身就以「关键词兜底：」开头时不再套一层前缀，否则会写成
+    「关键词兜底：50 分｜关键词兜底：…」。
+    """
     src = {"llm": "LLM 判档", "keyword": "关键词兜底", "gate": "0 分前置条件"}.get(v.source, v.source)
-    return f"{src}：{v.tier} 分｜{v.reason}" + (f"｜缺口：{v.missing}" if v.missing else "")
+    if v.reason.startswith(src):
+        txt = v.reason
+    else:
+        txt = f"{src}：{v.tier} 分｜{v.reason}"
+    return txt + (f"｜缺口：{v.missing}" if v.missing else "")
 
 
 def _verdict_evidence(v: Verdict) -> str:
@@ -43,18 +46,18 @@ def _verdict_evidence(v: Verdict) -> str:
 
 
 def _tiered(ind: str, v: Verdict) -> IndScore:
-    """三档制指标：档位直接取判档结论，不再由要素拼装。"""
+    """三档制指标：档位直接取判档结论。"""
     comps = [Component("", "判档依据", 0.0, None, _verdict_note(v), _verdict_evidence(v))]
     return IndScore(ind, IND_NAMES[ind], IND_WEIGHTS[ind], "tiered", comps,
                     raw=int(v.tier), note=f"{v.tier} 分（{v.source}）")
 
 
 # ---------------------------------------------------------------- S1.1.1
-def score_s111(res, turnover, prior, has_vol, bench: Bench, code: str,
-               ev: str = "", verdict: Verdict | None = None) -> IndScore:
-    """S1.1.1。``ev`` 是抽取流失率时的原文，用作 A/B 的证据引用（元素命中句常是无关行）。
+def score_s111(turnover, prior, bench: Bench, code: str,
+               ev: str = "", *, verdict: Verdict) -> IndScore:
+    """S1.1.1。``ev`` 是抽取流失率时的原文，用作 A/B 的证据引用。
 
-    ``verdict`` 是 C 项的定性判档结论；给了就用它，不给才回落到 29 要素的老逻辑。
+    ``verdict`` 是 C 项的定性判档结论，**必填**。
     """
     comps: list[Component] = []
     # A 同业流失率对标
@@ -66,58 +69,40 @@ def score_s111(res, turnover, prior, has_vol, bench: Bench, code: str,
         comps.append(Component("A", "同业流失率对标", 0.4, None,
                                "无对标池或缺本期流失率，A 不评" if turnover is None
                                else f"对标池样本不足（n={bench.n}）或本家无值，A 不评",
-                               ev or _ev(res, "S1.1.1-1")))
+                               ev))
     else:
         comps.append(Component("A", "同业流失率对标", 0.4, bench.band(pct_a),
                                f"流失率 {turnover:.2f}% → 同业分位 {pct_a:.0f}%（{bench.kind}, n={bench.n}）",
-                               ev or _ev(res, "S1.1.1-1")))
+                               ev))
     # B 同业趋势对标
     imp = improvement(turnover, prior)
     if turnover is None or prior is None:
         comps.append(Component("B", "同业趋势对标", 0.3, None,
-                               "缺本期或上期流失率，B 不评", ev or _ev(res, "S1.1.1-2")))
+                               "缺本期或上期流失率，B 不评", ev))
     elif prior == 0:
         comps.append(Component("B", "同业趋势对标", 0.3, 100 if turnover == 0 else 0,
-                               f"上期为 0，本期 {turnover}%", ev or _ev(res, "S1.1.1-2")))
+                               f"上期为 0，本期 {turnover}%", ev))
     else:
         pct_b = bench.percentile(code, "improvement", higher_better=True)
         if pct_b is not None:
             comps.append(Component("B", "同业趋势对标", 0.3, bench.band(pct_b),
                                    f"改善率 {imp:+.2f}% → 同业分位 {pct_b:.0f}%（{bench.kind}, n={bench.n}）",
-                                   ev or _ev(res, "S1.1.1-2")))
+                                   ev))
         else:
             # 无对标池：退化为「改善率方向」，与 10 份样本专家口径一致
             comps.append(Component("B", "同业趋势对标", 0.3, 100 if imp > 0 else 0,
                                    f"改善率 {imp:+.2f}%（无对标池，按改善方向取档）",
-                                   ev or _ev(res, "S1.1.1-2")))
-    # C 披露质量与就业终止保障
-    if verdict is not None:
-        comps.append(Component("C", "披露质量与就业终止保障", 0.3, int(verdict.tier),
-                               _verdict_note(verdict), _verdict_evidence(verdict)))
-    else:
-        lab, ter = _v(res, "S1.1.1-4"), _v(res, "S1.1.1-5")
-        if lab == "是" and ter == "是" and has_vol:
-            c, note = 100, "离职率构成披露 + 劳动合同与解雇安置制度齐备"
-        elif lab != "否" or ter != "否" or has_vol:
-            miss = []
-            if lab != "是":
-                miss.append(f"劳动合同（{lab}）")
-            if ter != "是":
-                miss.append(f"解雇与安置（{ter}）")
-            if not has_vol:
-                miss.append("自愿离职率构成")
-            c, note = 50, "缺：" + "、".join(miss) if miss else "有制度但缺保障成效证据"
-        else:
-            c, note = 0, "未识别到合同/终止保障相关内容"
-        comps.append(Component("C", "披露质量与就业终止保障", 0.3, c, note,
-                               _ev(res, "S1.1.1-4") or _ev(res, "S1.1.1-5")))
+                                   ev))
+    # C 披露质量与就业终止保障：取判档结论
+    comps.append(Component("C", "披露质量与就业终止保障", 0.3, int(verdict.tier),
+                           _verdict_note(verdict), _verdict_evidence(verdict)))
     return IndScore("S1.1.1", IND_NAMES["S1.1.1"], IND_WEIGHTS["S1.1.1"], "weighted", comps)
 
 
 # ---------------------------------------------------------------- S1.1.2
-def score_s112(res, gap, prior_gap, gap_basis: str = "", ev: str = "",
-               verdict: Verdict | None = None) -> IndScore:
-    """S1.1.2。`ev` 是抽取薪酬差距时的原文，用作 A/B 的证据引用。"""
+def score_s112(gap, prior_gap, gap_basis: str = "", ev: str = "",
+               *, verdict: Verdict) -> IndScore:
+    """S1.1.2。`ev` 是抽取薪酬差距时的原文，用作 A/B 的证据引用；``verdict`` 必填。"""
     comps: list[Component] = []
     if gap is None:
         comps.append(Component("A", "薪酬差距水平", 0.4, None, "未披露性别薪酬差距", ""))
@@ -127,10 +112,10 @@ def score_s112(res, gap, prior_gap, gap_basis: str = "", ev: str = "",
         a = next((s for upper, s in GAP_BANDS if g <= upper), 0)
         comps.append(Component("A", "薪酬差距水平", 0.4, a,
                                f"差距 {g:.2f}%" + ("（中位数）" if gap_basis != "avg" else "（平均值口径代入）"),
-                               ev or _ev(res, "S1.1.2-1")))
+                               ev))
         if prior_gap is None:
             comps.append(Component("B", "趋势得分", 0.3, None, "缺上期差距，B 不评",
-                                   ev or _ev(res, "S1.1.2-1")))
+                                   ev))
         else:
             pg = abs(prior_gap)
             if pg == 0:
@@ -151,76 +136,25 @@ def score_s112(res, gap, prior_gap, gap_basis: str = "", ev: str = "",
                 else:
                     b = 50 if imp > 0 else 0
                     note = f"改善率 {imp:+.2f}%（{pg:.2f}% → {g:.2f}%）"
-            comps.append(Component("B", "趋势得分", 0.3, b, note, _ev(res, "S1.1.2-1")))
-    # C 薪酬支付保障
-    if verdict is not None:
-        comps.append(Component("C", "薪酬支付保障", 0.3, int(verdict.tier),
-                               _verdict_note(verdict), _verdict_evidence(verdict)))
-        return IndScore("S1.1.2", IND_NAMES["S1.1.2"], IND_WEIGHTS["S1.1.2"],
-                        "weighted", comps)
-    pay, timely, audit = _v(res, "S1.1.2-2"), _v(res, "S1.1.2-3"), _v(res, "S1.1.2-5")
-    if audit == "是" and pay == "是":
-        c, note = 100, "有薪酬制度 + 内部审查/监测结果（性别薪酬差距审计等）"
-    elif pay == "是" or timely == "是":
-        c, note = 50, "有薪酬制度与执行措施，缺内部审查结果或纠正成效"
-    elif pay == "部分" or timely == "部分":
-        c, note = 50, "仅原则性表述，未达制度级"
-    else:
-        c, note = 0, "未识别到薪酬支付保障"
-    comps.append(Component("C", "薪酬支付保障", 0.3, c, note, _ev(res, "S1.1.2-2")))
+            comps.append(Component("B", "趋势得分", 0.3, b, note, ev))
+    # C 薪酬支付保障：取判档结论
+    comps.append(Component("C", "薪酬支付保障", 0.3, int(verdict.tier),
+                           _verdict_note(verdict), _verdict_evidence(verdict)))
     return IndScore("S1.1.2", IND_NAMES["S1.1.2"], IND_WEIGHTS["S1.1.2"], "weighted", comps)
 
 
 # ---------------------------------------------------------------- 三档制
-def score_s113(res, verdict: Verdict | None = None) -> IndScore:
-    if verdict is not None:
-        return _tiered("S1.1.3", verdict)
-    leaves = _v(res, "S1.1.3-5")
-    trio = [_v(res, f"S1.1.3-{i}") for i in (1, 2, 3)]
-    if leaves == "是":
-        s, note = 100, "有休假执行数据/覆盖（100 分档入口）"
-    elif any(v == "是" for v in trio) or sum(1 for v in trio if v == "部分") >= 2:
-        s, note = 50, "有工时/加班/排班措施，缺休假执行数据"
-    else:
-        s, note = 0, "未识别到具体措施"
-    comps = [Component("", "执行证据", 0.0, None,
-                       f"休假执行数据={leaves}；工时={trio[0]}/加班={trio[1]}/排班={trio[2]}",
-                       _ev(res, "S1.1.3-5") or _ev(res, "S1.1.3-1"))]
-    return IndScore("S1.1.3", IND_NAMES["S1.1.3"], IND_WEIGHTS["S1.1.3"], "tiered", comps, raw=s, note=note)
+def score_s113(verdict: Verdict) -> IndScore:
+    """三档制：档位直接取判档结论（100 / 50 / 0）。"""
+    return _tiered("S1.1.3", verdict)
 
 
-def score_s114(res, verdict: Verdict | None = None) -> IndScore:
-    if verdict is not None:
-        return _tiered("S1.1.4", verdict)
-    cov, base = _v(res, "S1.1.4-5"), _v(res, "S1.1.4-2")
-    items = [_v(res, f"S1.1.4-{i}") for i in (1, 3, 4)]
-    if cov == "是":
-        s, note = 100, "有福利覆盖/使用数据（100 分档入口）"
-    elif any(v != "否" for v in items) and base != "否":
-        s, note = 50, "有具体福利措施，缺覆盖范围或使用证据"
-    else:
-        s, note = 0, "仅原则性关怀声明或未识别"
-    comps = [Component("", "覆盖证据", 0.0, None,
-                       f"福利覆盖={cov}；社保={items[0]}/补充={items[1]}/育儿={items[2]}",
-                       _ev(res, "S1.1.4-5") or _ev(res, "S1.1.4-2"))]
-    return IndScore("S1.1.4", IND_NAMES["S1.1.4"], IND_WEIGHTS["S1.1.4"], "tiered", comps, raw=s, note=note)
+def score_s114(verdict: Verdict) -> IndScore:
+    return _tiered("S1.1.4", verdict)
 
 
-def score_s115(res, verdict: Verdict | None = None) -> IndScore:
-    if verdict is not None:
-        return _tiered("S1.1.5", verdict)
-    har, eq, disc, cases = (_v(res, "S1.1.5-4"), _v(res, "S1.1.5-1"),
-                            _v(res, "S1.1.5-3"), _v(res, "S1.1.5-6"))
-    if har == "是" and cases == "是":
-        s, note = 100, "反骚扰机制 + 事件处置证据（100 分档入口）"
-    elif disc != "否" and (eq != "否" or har != "否"):
-        s, note = 50, "有具名反歧视/反骚扰制度，缺专项监测或个案处置结果"
-    else:
-        s, note = 0, "仅笼统声明或未识别"
-    comps = [Component("", "制度与个案", 0.0, None,
-                       f"反骚扰={har}；平等机会={eq}；反歧视={disc}；事件统计={cases}",
-                       _ev(res, "S1.1.5-4") or _ev(res, "S1.1.5-3"))]
-    return IndScore("S1.1.5", IND_NAMES["S1.1.5"], IND_WEIGHTS["S1.1.5"], "tiered", comps, raw=s, note=note)
+def score_s115(verdict: Verdict) -> IndScore:
+    return _tiered("S1.1.5", verdict)
 
 
 SCORERS = {"score_s111": score_s111, "score_s112": score_s112,
@@ -233,24 +167,27 @@ if _MISSING:
 
 
 def build_card(code: str, name: str, report_year: int, file: str,
-               res: dict[str, ElementResult], data: ScoreData,
-               bench: Bench, has_vol: bool,
-               verdicts: dict[str, Verdict] | None = None) -> ScoreCard:
+               data: ScoreData, bench: Bench,
+               verdicts: dict[str, Verdict]) -> ScoreCard:
     """把五项指标装配成一张记分卡（判分函数只负责单指标，装配在这一处）。
 
-    ``verdicts`` 是定性判档结果（键见 ``rubric.QUALITATIVE_PARTS``）。给了就用判档，
-    没给（``--qualitative element``）才回落到 29 要素的老路径——两条路径评分口径不同，
-    所以模式必须进指纹，不能混在同一份缓存里。
+    ``verdicts`` 是定性判档结果（键见 ``rubric.QUALITATIVE_PARTS``），**五项缺一不可**。
+    缺判档说明链路出了问题，此时抛错而不是静默拼一个「看着正常、口径却过期」的分。
     """
-    v = verdicts or {}
+    v = dict(verdicts or {})
+    missing = [k for k in REQUIRED_VERDICTS if k not in v]
+    if missing:
+        raise ValueError(
+            f"{code} 缺定性判档结论 {missing}："
+            f"请用 --qualitative llm（或 llm 不可用时的 keyword）重跑")
     card = ScoreCard(code=code, name=name, report_year=report_year, file=file, data=data)
-    card.indicators["S1.1.1"] = score_s111(res, data.turnover, data.prior_turnover,
-                                           has_vol, bench, code, ev=data.turnover_quote,
-                                           verdict=v.get("S1.1.1-C"))
-    card.indicators["S1.1.2"] = score_s112(res, data.gap, data.prior_gap,
+    card.indicators["S1.1.1"] = score_s111(data.turnover, data.prior_turnover,
+                                           bench, code, ev=data.turnover_quote,
+                                           verdict=v["S1.1.1-C"])
+    card.indicators["S1.1.2"] = score_s112(data.gap, data.prior_gap,
                                            data.gap_basis, ev=data.gap_quote,
-                                           verdict=v.get("S1.1.2-C"))
-    card.indicators["S1.1.3"] = score_s113(res, v.get("S1.1.3"))
-    card.indicators["S1.1.4"] = score_s114(res, v.get("S1.1.4"))
-    card.indicators["S1.1.5"] = score_s115(res, v.get("S1.1.5"))
+                                           verdict=v["S1.1.2-C"])
+    card.indicators["S1.1.3"] = score_s113(v["S1.1.3"])
+    card.indicators["S1.1.4"] = score_s114(v["S1.1.4"])
+    card.indicators["S1.1.5"] = score_s115(v["S1.1.5"])
     return card

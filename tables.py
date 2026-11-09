@@ -12,8 +12,8 @@
 
 三张表的定位
 -----------
-- ``facts`` / ``elements`` / ``patches``：**证据层**。一行一个数值/判定/补丁，
-  每行都能回到页码与原文。这是「为什么是这个分」的全部依据。
+- ``facts``：**证据层**。一行一个数值，每行都能回到页码与原文。这是「这个数从哪来」
+  的全部依据。
 - ``indicators`` / ``components`` / ``companies``：**结果层**。分项与总分，带口径
   （严格/归一/可达上限/档位）与对标快照 id。
 - ``bench_rows`` / ``bench_meta``：**口径层**。这一年的 A/B 到底拿谁比的、n 是多少、
@@ -25,23 +25,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .models import (Batch, CompanyView, Component, ElementJudgement, Failure,
-                     Extraction, IndScore, NumFact, Patch, ScoreCard, ScoreData)
+from .models import (Batch, CompanyView, Component, Failure,
+                     Extraction, IndScore, NumFact, ScoreCard, ScoreData)
 from .store import TableStore
 
 # ---------------------------------------------------------------- 字段契约
 FACTS = ("code", "report_year", "field", "fact_year", "value", "page",
          "method", "confidence", "note", "quote")
-ELEMENTS = ("code", "report_year", "eid", "ind", "name", "verdict", "reason",
-            "confidence", "quote", "doubt", "patched")
-PATCHES = ("code", "eid", "name", "before", "after", "reason")
 INDICATORS = ("code", "report_year", "ind", "name", "weight", "kind",
               "strict", "normalized", "reachable", "band", "note", "raw_score")
 COMPONENTS = ("code", "ind", "comp_key", "name", "weight", "score", "note", "evidence")
 COMPANIES = ("code", "name", "file", "report_year", "status", "error", "warnings",
              "total_strict", "total_normalized", "weight_sum",
              "pct_a", "pct_b", "band_a", "band_b", "bench_snapshot",
-             "prior_source", "bench_note", "denom_note", "has_voluntary",
+             "prior_source", "bench_note", "denom_note",
              "turnover", "prior_turnover", "improvement", "leavers", "headcount",
              "gap", "gap_basis", "prior_gap", "cb_coverage",
              "turnover_quote", "gap_quote")
@@ -49,7 +46,7 @@ BENCH_ROWS = ("code", "report_year", "turnover", "prior_turnover", "industry", "
 BENCH_META = ("year", "kind", "peer_n", "note", "snapshot")
 
 SCHEMAS = {
-    "facts": FACTS, "elements": ELEMENTS, "patches": PATCHES,
+    "facts": FACTS,
     "indicators": INDICATORS, "components": COMPONENTS, "companies": COMPANIES,
     "bench_rows": BENCH_ROWS, "bench_meta": BENCH_META,
 }
@@ -63,28 +60,10 @@ def fact_rows(code: str, ex: Extraction) -> list[dict]:
              "note": f.note, "quote": f.quote} for f in ex.facts]
 
 
-def element_rows(code: str, report_year: int, rows: dict[str, ElementJudgement],
-                 patches: list[Patch]) -> list[dict]:
-    """一行一个要素。``quote`` 只存首条证据（报告展示的就是它），
-    全部证据仍留在 ``elements.json`` 产物里，需要时按 code 回查。
-    """
-    patched = {p.eid for p in patches}
-    return [{"code": code, "report_year": report_year, "eid": j.eid, "ind": j.ind,
-             "name": j.name, "verdict": j.verdict, "reason": j.reason,
-             "confidence": j.confidence, "quote": j.top_quote(),
-             "doubt": bool(j.doubt), "patched": j.eid in patched}
-            for j in rows.values()]
-
-
-def patch_rows(code: str, patches: list[Patch]) -> list[dict]:
-    return [{"code": code, "eid": p.eid, "name": p.name, "before": p.before,
-             "after": p.after, "reason": p.reason} for p in patches]
-
-
 # ---------------------------------------------------------------- 结果层
 def score_rows(code: str, name: str, file: str, card: ScoreCard,
                *, pct_a=None, pct_b=None, band_a=None, band_b=None,
-               bench_snapshot: str = "", has_voluntary: bool = False
+               bench_snapshot: str = ""
                ) -> tuple[dict, list[dict], list[dict]]:
     """一张记分卡 → （公司行, 指标行, 分项行）。报告层要用的数都在这里定稿。"""
     d = card.data or ScoreData(report_year=card.report_year)
@@ -99,7 +78,7 @@ def score_rows(code: str, name: str, file: str, card: ScoreCard,
         "pct_a": pct_a, "pct_b": pct_b, "band_a": band_a, "band_b": band_b,
         "bench_snapshot": bench_snapshot,
         "prior_source": d.prior_source, "bench_note": d.bench_note,
-        "denom_note": d.turnover_denom_note, "has_voluntary": has_voluntary,
+        "denom_note": d.turnover_denom_note,
         "turnover": d.turnover, "prior_turnover": d.prior_turnover,
         "improvement": d.improvement, "leavers": d.leavers,
         "headcount": d.headcount, "gap": d.gap, "gap_basis": d.gap_basis,
@@ -178,8 +157,6 @@ def publish(tables: TableStore, artifacts, runs, *, model_version: str,
     """
     codes = artifacts.units()
     facts: list[dict] = []
-    elements: list[dict] = []
-    patches: list[dict] = []
     companies: list[dict] = []
     indicators: list[dict] = []
     components: list[dict] = []
@@ -190,14 +167,6 @@ def publish(tables: TableStore, artifacts, runs, *, model_version: str,
         if payload:
             ex = Extraction.from_dict(payload)
             facts.extend(fact_rows(code, ex))
-        el = artifacts.payload(code, "elements")
-        if el:
-            judgements = {k: ElementJudgement.from_dict(v)
-                          for k, v in (el.get("elements") or {}).items()}
-            plist = [Patch.from_dict(x) for x in (el.get("patches") or [])]
-            elements.extend(element_rows(code, int(el.get("report_year") or 0),
-                                         judgements, plist))
-            patches.extend(patch_rows(code, plist))
         sc = scores.get(code)
         if sc:
             companies.append(sc.get("company") or {})
@@ -222,14 +191,12 @@ def publish(tables: TableStore, artifacts, runs, *, model_version: str,
                  "note": bench.note or bench_meta_note, "snapshot": snapshot}]
 
     counts = {
-        "facts": len(facts), "elements": len(elements), "patches": len(patches),
+        "facts": len(facts),
         "companies": len(companies), "indicators": len(indicators),
         "components": len(components), "bench_rows": len(bench_rows),
         "bench_meta": len(meta_row),
     }
     tables.write("facts", facts, FACTS)
-    tables.write("elements", elements, ELEMENTS)
-    tables.write("patches", patches, PATCHES)
     tables.write("companies", companies, COMPANIES)
     tables.write("indicators", indicators, INDICATORS)
     tables.write("components", components, COMPONENTS)
@@ -249,8 +216,6 @@ def load_batch(tables: TableStore) -> Batch:
     indicators = tables.read("indicators")
     components = tables.read("components")
     facts = tables.read("facts")
-    elements = tables.read("elements")
-    patches = tables.read("patches")
 
     by_ind: dict[str, list[dict]] = {}
     for r in indicators:
@@ -261,12 +226,6 @@ def load_batch(tables: TableStore) -> Batch:
     facts_by: dict[str, list[dict]] = {}
     for r in facts:
         facts_by.setdefault(str(r["code"]), []).append(r)
-    elem_by: dict[str, list[dict]] = {}
-    for r in elements:
-        elem_by.setdefault(str(r["code"]), []).append(r)
-    patch_by: dict[str, list[dict]] = {}
-    for r in patches:
-        patch_by.setdefault(str(r["code"]), []).append(r)
 
     batch = Batch(year=int(meta.get("year") or 0),
                   bench_kind=str(meta.get("kind") or "none"),
@@ -292,31 +251,18 @@ def load_batch(tables: TableStore) -> Batch:
                            confidence=str(f.get("confidence") or ""),
                            note=str(f.get("note") or ""))
                    for f in facts_by.get(code, [])],
-            elements={str(e["eid"]): ElementJudgement(
-                eid=str(e["eid"]), ind=str(e.get("ind") or ""),
-                name=str(e.get("name") or ""), verdict=str(e.get("verdict") or "否"),
-                reason=str(e.get("reason") or ""),
-                confidence=float(e.get("confidence") or 0),
-                quotes=[str(e["quote"])] if e.get("quote") else [],
-                doubt=bool(e.get("doubt")))
-                for e in elem_by.get(code, [])},
-            patches=[Patch(eid=str(p["eid"]), name=str(p.get("name") or ""),
-                           before=str(p.get("before") or ""), after=str(p.get("after") or ""),
-                           reason=str(p.get("reason") or ""))
-                     for p in patch_by.get(code, [])],
             pct_a=row.get("pct_a"), pct_b=row.get("pct_b"),
             band_a=None if row.get("band_a") is None else int(row["band_a"]),
             band_b=None if row.get("band_b") is None else int(row["band_b"])))
 
-    # 按代码排序（= 文件名序）：汇总表自己会按分数排，视图不必替它决定顺序，
-    # 否则「要素矩阵」的列顺序会随分数变动而跳动，历史报告无法逐格对比。
+    # 按代码排序（= 文件名序）：汇总表自己会按分数排，视图不必替它决定顺序。
     batch.views.sort(key=lambda v: v.code)
     batch.failures.sort(key=lambda f: f.code)
     return batch
 
 
 __all__ = [
-    "SCHEMAS", "FACTS", "ELEMENTS", "PATCHES", "INDICATORS", "COMPONENTS",
+    "SCHEMAS", "FACTS", "INDICATORS", "COMPONENTS",
     "COMPANIES", "BENCH_ROWS", "BENCH_META",
-    "fact_rows", "element_rows", "patch_rows", "score_rows", "publish", "load_batch",
+    "fact_rows", "score_rows", "publish", "load_batch",
 ]

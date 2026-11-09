@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
-"""编排层：一次批处理 = 七段，每段产物落地、可复用、可单独重跑。
+"""编排层：一次批处理 = 六段，每段产物落地、可复用、可单独重跑。
 
-    parse(code)      PDF → 页级文本                    （最贵，必须能存）
-    facts(code)      文本 → 数值 + 人工兜底              （依赖 parse）
-    elements(code)   文本 → 29 要素判定 + 增强补丁        （依赖 parse）
-    prior(code)      上一年 facts → 上期值三级回退        （跨年边！）
-    bench(year)      全批数值 → 对标池                   ← 唯一的屏障（全对全）
-    score(code)      数值+要素+对标 → 记分卡              （依赖 facts/elements/prior/bench）
-    publish(year)    产物 → gold 表
-    report(year)     gold 表 → 工作簿
+    parse(code)       PDF → 页级文本                  （最贵，必须能存）
+    facts(code)       文本 → 数值 + 人工兜底            （依赖 parse）
+    prior(code)       上一年 facts → 上期值三级回退     （跨年边！）
+    qualitative(code) 文本 → 五处定性判档               （依赖 parse + facts 的流失率闸门）
+    bench(year)       全批数值 → 对标池                 ← 唯一的屏障（全对全）
+    score(code)       数值 + 判档 + 对标 → 记分卡       （依赖 facts/prior/qualitative/bench）
+    publish(year)     产物 → gold 表
+    report(year)      gold 表 → 工作簿
 
 为什么要两遍
 -----------
@@ -41,8 +41,6 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import s11_elements
-import s11_judge
 import s11_text
 from s11_text import PDFLoadError, load_pdf
 
@@ -50,19 +48,17 @@ from . import bench as bench_mod
 from . import blind as blind_mod
 from . import config as config_mod
 from . import extract as extract_mod
-from . import judge_plus as judge_plus_mod
 from . import metrics as metrics_mod
 from . import qualitative as qual_mod
 from . import scoring as scoring_mod
 from . import stages, tables
 from .bench import Bench, from_rows, load_csv
-from .config import (BENCH_VERSION, EXTRACT_VERSION, JUDGE_PLUS_VERSION,
+from .config import (BENCH_VERSION, EXTRACT_VERSION,
                      MODEL_VERSION, PARSE_VERSION, TABLE_VERSION)
-from .judge_plus import adjudicate
 from .llm import LLMError
 from .llm import from_settings as llm_from_settings
 from .metrics import improvement
-from .models import (Batch, CompanyRun, ElementJudgement, Extraction, Patch,
+from .models import (Batch, CompanyRun, Extraction,
                      PeerRow, ScoreCard, ScoreData)
 from .qualitative import Verdict
 from .rubric import QUALITATIVE_PARTS, RUBRICS, rubric_hash
@@ -119,17 +115,23 @@ class StageStat:
 
 
 def _stage(store: ArtifactStore, name: str, code: str, key: str, compute,
-           *, force: bool = False, stats: dict[str, StageStat] | None = None) -> dict:
-    """「指纹一致就复用，否则重算并落盘」——整条链路里唯一的复用判据入口。"""
+           *, force: bool = False, stats: dict[str, StageStat] | None = None,
+           stat_name: str | None = None) -> dict:
+    """「指纹一致就复用，否则重算并落盘」——整条链路里唯一的复用判据入口。
+
+    ``stat_name`` 只影响统计口径：同一段有多种变体（如 ``qualitative-llm`` /
+    ``qualitative-keyword``）时，产物分开存，但统计仍记在同一个阶段名下。
+    """
+    sname = stat_name or name
     if not force and store.fresh(code, name, key):
-        if stats and name in stats:
-            stats[name].touch(True)
+        if stats and sname in stats:
+            stats[sname].touch(True)
         return store.payload(code, name) or {}
     t0 = time.perf_counter()
     payload = compute()
     store.write(code, name, key, payload, producer=PRODUCER)
-    if stats and name in stats:
-        stats[name].touch(False, time.perf_counter() - t0)
+    if stats and sname in stats:
+        stats[sname].touch(False, time.perf_counter() - t0)
     return payload
 
 
@@ -163,34 +165,36 @@ def facts_unit(store: ArtifactStore, code: str, pdf: Path, year: int, *,
     return _stage(store, "facts", code, key, compute, force=force, stats=stats)
 
 
-def elements_unit(store: ArtifactStore, code: str, *, force: bool = False,
-                  stats=None, report_year: int = 0) -> dict:
-    """要素判定。词表仓库（``s11_elements``/``s11_judge``）与增强层都进指纹：
-    词表一动，判定与分数就该重算。"""
-    parse_key = store.key(code, "parse") or "-"
-    key = combine(parse_key, JUDGE_PLUS_VERSION,
-                  source_digest(s11_elements, s11_judge, judge_plus_mod, stages))
-
-    def compute() -> dict:
-        judgements, patches, has_vol = stages.run_judge(store.payload(code, "parse") or {})
-        return {"report_year": report_year, "has_voluntary": has_vol,
-                "elements": {k: v.to_dict() for k, v in judgements.items()},
-                "patches": [p.to_dict() for p in patches]}
-
-    return _stage(store, "elements", code, key, compute, force=force, stats=stats)
-
-
-def judgements_from(payload: dict) -> dict[str, ElementJudgement]:
-    return {k: ElementJudgement.from_dict(v)
-            for k, v in (payload.get("elements") or {}).items()}
-
-
 def verdicts_from(payload: dict) -> dict[str, Verdict]:
     return {k: Verdict.from_dict(v) for k, v in (payload or {}).items() if isinstance(v, dict)}
 
 
 # ---------------------------------------------------------------- 定性判档
-QUAL_MODES = ("element", "llm", "keyword")
+# 判档只有 llm 与 keyword 两条路（离线兜底）。
+QUAL_MODES = ("llm", "keyword")
+
+
+def qualitative_artifact(mode: str) -> str:
+    """判档产物的文件名按模式分开：``qualitative-llm`` / ``qualitative-keyword``。
+
+    为什么不能共用一份：一个 code 只有一个 ``qualitative.json`` 时，跑完 keyword 再跑 llm
+    会把它顶掉，于是下次 llm 又得重调 25 次模型——测试套件（keyword）跑一次，真跑就得重算。
+    分开存之后，两种口径各留各的，互不失效。
+    """
+    return f"qualitative-{mode}"
+
+
+def qualitative_key(store: ArtifactStore, code: str, *, mode: str, llm,
+                    blinder, has_turnover: bool) -> str:
+    """判档产物的指纹。单独抽出来，是为了让缓存迁移脚本也能算出同一个 key。"""
+    parse_key = store.key(code, "parse") or "-"
+    # 闸门只看「有没有本期流失率」这一位，不把整份 facts 拉进来：
+    # 补一条人工兜底值不该让 5 个指标全部重调模型（那是 25 次 API 调用）。
+    gate_bit = "gate:0" if has_turnover else "gate:1"
+    use_llm = mode != "keyword" and llm is not None and llm.ready
+    return combine(parse_key, gate_bit, rubric_hash(), mode,
+                   llm.fingerprint() if use_llm else "-", blinder.digest(),
+                   source_digest(qual_mod, blind_mod))
 
 
 def qualitative_unit(store: ArtifactStore, code: str, filename: str, *,
@@ -202,12 +206,9 @@ def qualitative_unit(store: ArtifactStore, code: str, filename: str, *,
     都会改变「模型看到了什么」或「依据什么判」，旧结论必须作废。这是 LLM 参与打分后
     唯一能保证「同一份报告同分」的手段——把影响输出的东西全压进 key。
     """
-    parse_key = store.key(code, "parse") or "-"
-    facts_key = store.key(code, "facts") or "-"      # gate 依赖「是否披露本期流失率」
     use_llm = mode != "keyword" and llm is not None and llm.ready
-    key = combine(parse_key, facts_key, rubric_hash(), mode,
-                  llm.fingerprint() if use_llm else "-", blinder.digest(),
-                  source_digest(qual_mod, blind_mod))
+    key = qualitative_key(store, code, mode=mode, llm=llm,
+                          blinder=blinder, has_turnover=has_turnover)
 
     def compute() -> dict:
         doc = stages.doc_from_payload(store.payload(code, "parse") or {})
@@ -220,7 +221,8 @@ def qualitative_unit(store: ArtifactStore, code: str, filename: str, *,
             out[k] = v.to_dict()
         return out
 
-    return _stage(store, "qualitative", code, key, compute, force=force, stats=stats)
+    return _stage(store, qualitative_artifact(mode), code, key, compute,
+                  force=force, stats=stats, stat_name="qualitative")
 
 
 def blinder_for(code: str, filename: str, extra) -> blind_mod.Blinder:
@@ -228,16 +230,12 @@ def blinder_for(code: str, filename: str, extra) -> blind_mod.Blinder:
     return blind_mod.build(code, filename=filename, extra=extra)
 
 
-def patches_from(payload: dict) -> list[Patch]:
-    return [Patch.from_dict(x) for x in (payload.get("patches") or [])]
-
-
 # ---------------------------------------------------------------- 打分（共享）
 def build_scorecard(code: str, name: str, ry: int, filename: str,
-                    facts: Extraction, judgements: dict, bench: Bench,
-                    has_vol: bool, *, prior_turnover, prior_gap,
-                    prior_source: str, verdicts: dict | None = None) -> ScoreCard:
-    """量化事实 + 要素判定/定性判档 → 一张记分卡。内存路径与落地路径共用这一处。"""
+                    facts: Extraction, bench: Bench, *,
+                    prior_turnover, prior_gap,
+                    prior_source: str, verdicts: dict) -> ScoreCard:
+    """量化事实 + 定性判档 → 一张记分卡。内存路径与落地路径共用这一处。"""
     turnover = facts.value("turnover", ry)
     gap = facts.value("gender_gap", ry)
     gap_basis = "median"
@@ -264,8 +262,7 @@ def build_scorecard(code: str, name: str, ry: int, filename: str,
         turnover_quote=turnover_fact.quote if turnover_fact else "",
         gap_quote=gap_fact.quote if gap_fact else "",
     )
-    return build_card(code, name, ry, filename, judgements, data, bench,
-                      bool(turnover is not None and has_vol), verdicts=verdicts)
+    return build_card(code, name, ry, filename, data, bench, verdicts=verdicts)
 
 
 # ---------------------------------------------------------------- 编排器
@@ -278,9 +275,6 @@ class Unit:
     run: CompanyRun
     parse: dict | None = None
     facts: Extraction | None = None
-    judgements: dict[str, ElementJudgement] = field(default_factory=dict)
-    patches: list[Patch] = field(default_factory=list)
-    has_voluntary: bool = False
     resolved: dict = field(default_factory=dict)
     prior_key: str = "none"
     verdicts: dict[str, Verdict] = field(default_factory=dict)
@@ -300,12 +294,12 @@ class PipelineResult:
 class Pipeline:
     """一次年度批处理。构造时只知道「算哪些、存哪、能不能复用」。"""
 
-    STAGES = ("parse", "facts", "elements", "qualitative", "score")
+    STAGES = ("parse", "facts", "qualitative", "score")
 
     def __init__(self, year: int, build_dir: str | Path, *, force: bool = False,
                  progress=None, override_csv: str | Path | None = None,
                  bench_mode: str = "auto", bench_csv: str | Path | None = None,
-                 qualitative: str = "element"):
+                 qualitative: str = "llm"):
         self.year = int(year)
         self.build_dir = Path(build_dir)
         self.force = force
@@ -354,14 +348,6 @@ class Pipeline:
                              parse_payload=u.parse)
         u.facts = Extraction.from_dict(payload)
 
-    # -- 3 判定 ----------------------------------------------------------
-    def step_elements(self, u: Unit) -> None:
-        payload = elements_unit(self.store, u.code, force=self.force, stats=self.stats,
-                                report_year=self.year)
-        u.judgements = judgements_from(payload)
-        u.patches = patches_from(payload)
-        u.has_voluntary = bool(payload.get("has_voluntary"))
-
     # -- 4 上期值（跨年边）------------------------------------------------
     def prior_pdf(self, code: str, prior_dir: str | Path | None) -> Path | None:
         if not prior_dir or not Path(prior_dir).is_dir():
@@ -395,9 +381,7 @@ class Pipeline:
 
     # -- 5 定性判档（LLM / 关键词兜底）-------------------------------------
     def step_qualitative(self, u: Unit) -> None:
-        """一指标一次判档；``element`` 模式跳过（走 29 要素老路径）。"""
-        if self.qualitative == "element":
-            return
+        """一指标一次判档。这是打分的必经一步：判档缺了，C 项与 S1.1.3/4/5 就没有分。"""
         turnover = None
         if u.facts is not None:
             ry = u.facts.report_year or self.year
@@ -437,8 +421,9 @@ class Pipeline:
 
     # -- 7 打分 ----------------------------------------------------------
     def step_score(self, u: Unit, bench: Bench, snapshot: str) -> None:
-        key = combine(self.store.key(u.code, "facts"), self.store.key(u.code, "elements"),
-                      self.store.key(u.code, "qualitative"), self.store.key(u.code, "prior"),
+        key = combine(self.store.key(u.code, "facts"),
+                      self.store.key(u.code, qualitative_artifact(self.qualitative)),
+                      self.store.key(u.code, "prior"),
                       snapshot, MODEL_VERSION, TABLE_VERSION,
                       source_digest(scoring_mod, config_mod, metrics_mod, bench_mod,
                                     tables, stages))
@@ -450,7 +435,7 @@ class Pipeline:
         def compute() -> dict:
             ry = u.facts.report_year
             card = build_scorecard(u.code, u.name, ry, u.pdf.name, u.facts,
-                                   u.judgements, bench, u.has_voluntary,
+                                   bench,
                                    prior_turnover=prior_t, prior_gap=prior_g,
                                    prior_source=label, verdicts=u.verdicts)
             card.warnings = list(u.facts.warnings)
@@ -460,7 +445,7 @@ class Pipeline:
                 u.code, u.name, u.pdf.name, card,
                 pct_a=pct_a, pct_b=pct_b,
                 band_a=bench.band(pct_a), band_b=bench.band(pct_b),
-                bench_snapshot=snapshot, has_voluntary=u.has_voluntary)
+                bench_snapshot=snapshot)
             return {"company": company, "indicators": inds, "components": comps}
 
         payload = _stage(self.store, "score", u.code, key, compute,
@@ -496,24 +481,20 @@ class Pipeline:
 
         live = [u for u in units if u.run.status == "ok"]
 
-        # 2) 抽数  3) 判定
+        # 2) 抽数
         for u in live:
             self._say(f"[抽数] {u.code}")
             self.step_facts(u)
-        for u in live:
-            self._say(f"[判定] {u.code}")
-            self.step_elements(u)
 
-        # 4) 上期值（跨年：读上一年已落地的事实，不重新解析 PDF）
+        # 3) 上期值（跨年：读上一年已落地的事实，不重新解析 PDF）
         for u in live:
             self._say(f"[上期] {u.code}")
             self.step_prior(u, prior_dir)
 
-        # 4.5) 定性判档（LLM 或关键词兜底；element 模式跳过）
-        if self.qualitative != "element":
-            for u in live:
-                self._say(f"[定性] {u.code} ({self.qualitative})")
-                self.step_qualitative(u)
+        # 4) 定性判档（LLM；无 key 时自动退关键词兜底）—— 打分的必经一步
+        for u in live:
+            self._say(f"[定性] {u.code} ({self.qualitative})")
+            self.step_qualitative(u)
 
         # 5) 对标池 —— 全批屏障，必须等所有公司抽完
         bench = self.make_bench(live)
@@ -543,10 +524,11 @@ def run_pipeline(pdf: str | Path, year: int, prior_dir: str | Path | None = None
                  *, build_dir: str | Path, bench_mode: str = "auto",
                  bench_csv: str | Path | None = None,
                  override_csv: str | Path | None = None, force: bool = False,
-                 qualitative: str = "element", progress=None) -> PipelineResult:
+                 qualitative: str = "llm", progress=None) -> PipelineResult:
     """跑完一年的全流程（含发布）。报告写不写由调用方决定。
 
-    ``qualitative``：``element``（29 要素，默认，离线可复现）/ ``llm`` / ``keyword``。
+    ``qualitative``：``llm``（默认；无 key 时自动退 ``keyword``）/ ``keyword``。
+    两条都走定性判档：判档结论直接是 C 项与 S1.1.3/4/5 的分。
     """
     pipe = Pipeline(year, build_dir, force=force, progress=progress,
                     override_csv=override_csv, bench_mode=bench_mode,
@@ -558,7 +540,7 @@ def score_batch(pdf: str | Path, year: int = 2025, prior_dir: str | Path | None 
                 bench_mode: str = "auto", bench_csv: str | Path | None = None,
                 report_year: int | None = None, override_csv: str | Path | None = None,
                 progress=None, build_dir: str | Path | None = None,
-                force: bool = False, qualitative: str = "element"
+                force: bool = False, qualitative: str = "llm"
                 ) -> tuple[list[CompanyRun], Bench]:
     """兼容入口：``(runs, bench)``。全量能力请直接用 ``run_pipeline``。"""
     if prior_dir is None:
@@ -573,9 +555,9 @@ def score_batch(pdf: str | Path, year: int = 2025, prior_dir: str | Path | None 
 
 
 # ---------------------------------------------------------------- 内存路径
-def run_extract_judge(pdfs: list[Path], year: int, report_year: int | None = None,
+def run_extract_batch(pdfs: list[Path], year: int, report_year: int | None = None,
                       progress=None) -> list[CompanyRun]:
-    """第一遍：全批解析 + 抽数 + 判定（不落地、不算分位）。
+    """第一遍：全批解析 + 抽数（不落地、不算分位）。
 
     保留这个纯内存入口是为了校准脚本（``calibrate.py``）跑小样本：它不需要对标池、
     不需要历史，也就不该被缓存和表牵着走。
@@ -593,27 +575,41 @@ def run_extract_judge(pdfs: list[Path], year: int, report_year: int | None = Non
             runs.append(run)
             continue
         run.ex = extract_mod.extract(run.doc, Path(pdf).name, report_year=report_year or year)
-        res, patches = adjudicate(run.doc)
-        run.res = {k: ElementJudgement.from_result(v) for k, v in res.items()}
-        run.patches = patches
-        run.has_voluntary = stages.has_voluntary(run.doc)
         runs.append(run)
     return runs
 
 
-def run_score(runs: list[CompanyRun], bench: Bench) -> list[CompanyRun]:
-    """第二遍：按已有对标池逐家打分（内存路径）。"""
+def run_score(runs: list[CompanyRun], bench: Bench, *, mode: str = "keyword",
+              llm=None, aliases=None) -> list[CompanyRun]:
+    """第二遍：按已有对标池逐家打分（内存路径）。
+
+    判档在这里**现算**（默认关键词兜底：离线、确定性）。没有判档就没有 C 项与
+    S1.1.3/4/5 的分，所以这一步不能省。
+    需要 LLM 口径时传 ``mode="llm"``（无可用客户端会自动退关键词）。
+    """
+    settings = get_settings()
+    llm = llm if llm is not None else llm_from_settings(settings)
+    if aliases is None:
+        aliases = blind_mod.load_alias_csv(settings.alias_csv)
+    use_llm = mode == "llm" and llm is not None and llm.ready
     for run in runs:
         if run.doc is None or run.ex is None:
             run.status = run.status if run.status != "ok" else "无数据"
             continue
         ry = run.ex.report_year
         label = stages.prior_source_label(run.ex, run.prior_source, ry)
+        has_t = run.ex.value("turnover", ry) is not None
+        bl = blinder_for(run.code, Path(run.pdf).name, aliases)
+        verdicts = {k: qual_mod.judge(run.doc, rub, llm if use_llm else None,
+                                      blinder=bl,
+                                      gate_hit=bool(rub.gate) and not has_t,
+                                      mode="auto" if use_llm else "keyword")
+                    for k, rub in RUBRICS.items()}
         run.card = build_scorecard(run.code, run.name, ry, Path(run.pdf).name, run.ex,
-                                   run.res, bench, run.has_voluntary,
+                                   bench,
                                    prior_turnover=run.prior_turnover(ry),
                                    prior_gap=run.prior_gap(ry),
-                                   prior_source=label)
+                                   prior_source=label, verdicts=verdicts)
         run.card.warnings = list(run.ex.warnings)
         run.status = "ok"
     return runs
@@ -621,7 +617,8 @@ def run_score(runs: list[CompanyRun], bench: Bench) -> list[CompanyRun]:
 
 __all__ = [
     "scan", "unit_identity", "Pipeline", "PipelineResult", "Unit", "StageStat",
-    "run_pipeline", "score_batch", "run_extract_judge", "run_score",
-    "build_scorecard", "parse_unit", "facts_unit", "elements_unit",
-    "qualitative_unit", "verdicts_from", "blinder_for", "QUAL_MODES",
+    "run_pipeline", "score_batch", "run_extract_batch", "run_score",
+    "build_scorecard", "parse_unit", "facts_unit",
+    "qualitative_unit", "qualitative_artifact", "qualitative_key",
+    "verdicts_from", "blinder_for", "QUAL_MODES",
 ]

@@ -25,19 +25,13 @@ import esg_s11_scorer  # noqa: F401  （触发 sys.path 注入 ESG_insight/app�
 from esg_s11_scorer import scoring
 from esg_s11_scorer.bench import from_rows
 from esg_s11_scorer.config import GAP_B_FLOOR, GAP_NEAR_ZERO
-from esg_s11_scorer.models import ElementJudgement, PeerRow
+from esg_s11_scorer.models import PeerRow
+from esg_s11_scorer.qualitative import Verdict
 
 
-def _res(pairs: dict[str, str]) -> dict[str, ElementJudgement]:
-    """要素判定桩：``{"S1.1.1-4": "是"}`` → ElementJudgement 字典。"""
-    return {eid: ElementJudgement(eid=eid, ind=eid.split("-")[0], name=eid, verdict=v)
-            for eid, v in pairs.items()}
-
-
-# S1.1.1 C 项拿 100 的三个条件：合同 + 解雇安置 + 离职率构成（has_vol）
-S111_C_FULL = {"S1.1.1-4": "是", "S1.1.1-5": "是"}
-# S1.1.2 C 项拿 100 的条件：制度（-2）+ 审查（-5）
-S112_C_FULL = {"S1.1.2-2": "是", "S1.1.2-3": "是", "S1.1.2-5": "是"}
+def _verdict(tier: int = 100, key: str = "S1.1.1-C") -> Verdict:
+    """判档桩：C 项与三档制一律吃 Verdict。"""
+    return Verdict(key=key, tier=tier, reason="单测桩", evidence=["[p1] 原文"])
 
 
 def _bench_zero_first() -> "object":
@@ -60,7 +54,7 @@ class TestZeroTurnoverIsBestNotMissing(unittest.TestCase):
         self.assertEqual(self.bench.band(20.0), 100)
 
     def test_a_component_scored_instead_of_na(self):
-        s = scoring.score_s111(_res(S111_C_FULL), 0.0, 2.0, True, self.bench, "Z")
+        s = scoring.score_s111(0.0, 2.0, self.bench, "Z", verdict=_verdict(100))
         a = s.components[0]
         self.assertIsNotNone(a.score, msg="流失率 0% 被当成缺失 → A 项记了 N/A")
         self.assertEqual(a.score, 100)
@@ -68,17 +62,38 @@ class TestZeroTurnoverIsBestNotMissing(unittest.TestCase):
 
     def test_missing_turnover_still_na(self):
         """真的没值仍然是 N/A——修 bug 不能把 N/A 口径一起改掉。"""
-        s = scoring.score_s111(_res(S111_C_FULL), None, None, True, self.bench, "Z")
+        s = scoring.score_s111(None, None, self.bench, "Z", verdict=_verdict(100))
         self.assertIsNone(s.components[0].score)
         self.assertIsNone(s.components[1].score)     # 上期也没有 → B 同样不评
         self.assertEqual(s.reachable, 30.0)          # 只剩 C(30%) 可评
+
+
+class TestVerdictDrivesC(unittest.TestCase):
+    """C 项只认判档结论：没有任何词法判定能再拼出分数。"""
+
+    def test_c_follows_verdict(self):
+        s = scoring.score_s111(5.0, 6.0, _bench_zero_first(), "C0", verdict=_verdict(0))
+        c = next(x for x in s.components if x.key == "C")
+        self.assertEqual(c.score, 0, "C 项必须听判档，不能由别的路径拼出来")
+
+    def test_c_note_carries_verdict_reason(self):
+        s = scoring.score_s111(5.0, 6.0, _bench_zero_first(), "C0", verdict=_verdict(50))
+        c = next(x for x in s.components if x.key == "C")
+        self.assertIn("50 分", c.note)
+        self.assertIn("单测桩", c.note)
+
+    def test_tiered_indicators_take_verdict_tier(self):
+        for fn, key in ((scoring.score_s113, "S1.1.3"), (scoring.score_s114, "S1.1.4"),
+                        (scoring.score_s115, "S1.1.5")):
+            self.assertEqual(fn(_verdict(50, key)).raw, 50)
+            self.assertEqual(fn(_verdict(0, key)).raw, 0)
 
 
 class TestGapTrendBands(unittest.TestCase):
     """S1.1.2 B 项的档位边界：两个阈值（3% 与 2%）不能混用。"""
 
     def _b(self, gap: float, prior_gap: float) -> int | None:
-        s = scoring.score_s112(_res(S112_C_FULL), gap, prior_gap)
+        s = scoring.score_s112(gap, prior_gap, verdict=_verdict(100, "S1.1.2-C"))
         return s.components[1].score
 
     def test_config_anchors(self):
@@ -103,7 +118,7 @@ class TestGapTrendBands(unittest.TestCase):
         self.assertEqual(self._b(2.5, 0.0), 0, "上期为 0 时只认 2%，不能套用 3%")
 
     def test_gap_missing_keeps_na(self):
-        s = scoring.score_s112(_res(S112_C_FULL), None, None)
+        s = scoring.score_s112(None, None, verdict=_verdict(100, "S1.1.2-C"))
         self.assertIsNone(s.components[0].score)
         self.assertIsNone(s.components[1].score)
 

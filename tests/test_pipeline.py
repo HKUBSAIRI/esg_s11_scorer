@@ -21,7 +21,7 @@ def _run():
     override = DEFAULT_OUT / "overrides_FY2025.csv"
     return score_batch(REPORT_DIR / "FY2025", year=2025,
                        override_csv=override if override.exists() else None,
-                       progress=None)
+                       qualitative="keyword", progress=None)
 
 
 class TestPipeline(unittest.TestCase):
@@ -84,8 +84,6 @@ def main() -> None:
         d = c.data
         print(f"        流失 {d.turnover} <- {d.prior_turnover} 改善 {d.improvement}"
               f" | 差距 {d.gap} | 上期 {d.prior_source}")
-        for p in r.patches:
-            print(f"        [补丁] {p.eid} {p.before}→{p.after}：{p.reason[:60]}")
 
 
 if __name__ == "__main__":
