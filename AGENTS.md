@@ -30,8 +30,9 @@
 
 默认命令 = 用 `.env` 里那项（现在是 `FY2025/`，**20 份 PDF**）全量重算，并且：
 
-- 会**覆盖** `good_sample/分析指标/打分结果/S1.1_批次汇总_2025.xlsx` —— 那是 5 家的交付物
-  （2026-11-09 13:27 生成），20 家的结果会把它冲掉；
+- 会**覆盖** `good_sample/分析指标/打分结果/` 下的全部交付物：`S1.1_批次汇总_2025.xlsx`、
+  `FY2025/` 里 20 份单家报告、两张图册表 —— 这批现在是 20 家的 1.4 版本（2026-11-09 16:29），
+  重跑会原地改写分数（判档抖动、池子家数变化都会反映进去）；
 - `--qualitative llm` 默认调付费模型，20 家 × 5 处判档的 token 实打实花钱。
 
 只想验证代码能不能跑：
@@ -86,6 +87,9 @@ python -m esg_s11_scorer --dry-run --qualitative keyword --build-dir D:\tmp\esgb
 - 指纹里含**源码摘要**（`store.source_digest`）：改了 `extract.py` 一定重算 facts，不需要谁记得升版本。
   所以「第二次 2 秒跑完」= 这次真的没有东西需要重算。
 - 怀疑缓存不对、或要确认跑的是当前代码：加 `--force`。
+- 对标池每次运行都会落成 `build/bench/FY{year}/{snapshot}.json`；`--bench-snapshot <id>` 读回，
+  `--freeze-bench` 只采集+冻结（不算分、不发布）。收集名单在 `build/FY{year}/manifest.csv`，
+  回答「池子为什么少了一家」先看它。
 - 现在 `build/FY2025/` 已有 **20 家**的产物，`build/FY2024/` 有 5 家（上一年只需被读）。
   注意 `ESG_PRIOR_DIR` 指向的 `ESG报告/FY2024/` 目前**是空的**，上期值靠报告附录 + override 表。
 

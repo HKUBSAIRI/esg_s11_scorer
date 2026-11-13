@@ -36,6 +36,7 @@ facts 之后重算、parse 复用；换一份 PDF → 该公司从 parse 起全�
 """
 from __future__ import annotations
 
+import csv
 import re
 import time
 from dataclasses import dataclass, field
@@ -52,7 +53,7 @@ from . import metrics as metrics_mod
 from . import qualitative as qual_mod
 from . import scoring as scoring_mod
 from . import stages, tables
-from .bench import Bench, from_rows, load_csv
+from .bench import Bench, from_rows, load_csv, load_snapshot, save_snapshot
 from .config import (BENCH_VERSION, EXTRACT_VERSION,
                      MODEL_VERSION, PARSE_VERSION, TABLE_VERSION)
 from .llm import LLMError
@@ -282,12 +283,13 @@ class Unit:
 
 @dataclass
 class PipelineResult:
-    batch: Batch
+    batch: Batch | None          # stop_after="bench"（冻结/采集）时没有已发布批次
     runs: list[CompanyRun]
     bench: Bench
     stats: dict[str, StageStat] = field(default_factory=dict)
     counts: dict[str, int] = field(default_factory=dict)
     snapshot: str = ""
+    manifest: Path | None = None                 # 本次收集名单（谁进池、谁为什么没进）
     artifacts: ArtifactStore | None = None      # 本次的产物目录（调试/回查用）
 
 
@@ -299,7 +301,8 @@ class Pipeline:
     def __init__(self, year: int, build_dir: str | Path, *, force: bool = False,
                  progress=None, override_csv: str | Path | None = None,
                  bench_mode: str = "auto", bench_csv: str | Path | None = None,
-                 qualitative: str = "llm"):
+                 qualitative: str = "llm",
+                 bench_snapshot: str | Path | None = None):
         self.year = int(year)
         self.build_dir = Path(build_dir)
         self.force = force
@@ -307,6 +310,7 @@ class Pipeline:
         self.override_csv = override_csv
         self.bench_mode = bench_mode
         self.bench_csv = bench_csv
+        self.bench_snapshot = str(bench_snapshot) if bench_snapshot else ""
         if qualitative not in QUAL_MODES:
             raise ValueError(f"--qualitative 只能是 {QUAL_MODES}，收到 {qualitative!r}")
         self.qualitative = qualitative
@@ -395,6 +399,18 @@ class Pipeline:
 
     # -- 6 对标（年批次屏障）----------------------------------------------
     def make_bench(self, units: list[Unit]) -> Bench:
+        """建池。给了 ``--bench-snapshot`` 就直接读冻结池，**不建池也不看本批家数**。
+
+        这是「先采集、后算分」的落点：采集期可以只有 3 家，算分期拿一个 n=16 的
+        冻结池，同一家公司两次跑出同一个 A/B 分。
+        """
+        if self.bench_snapshot:
+            bench = load_snapshot(self.snapshot_file(self.bench_snapshot))
+            if bench.rows and all(r.year != self.year for r in bench.rows):
+                raise ValueError(
+                    f"快照 {self.bench_snapshot} 的行年度与本批 FY{self.year} 不符，"
+                    f"拒绝用它算分（换一份对应年度的快照）")
+            return bench
         if self.bench_mode == "none":
             return Bench(kind="none", note="按参数关闭对标（A/B 记 N/A）")
         if self.bench_mode == "csv":
@@ -418,6 +434,74 @@ class Pipeline:
         """对标池的指纹。A/B 是相对量：池子一变分数就该变，这个 id 让它**可见**。"""
         rows = sorted((r.code, r.year, r.turnover, r.prior_turnover) for r in bench.rows)
         return short(combine(BENCH_VERSION, bench.kind, rows), 16)
+
+    # -- 6b 池子冻结 / 读回 -----------------------------------------------
+    def bench_snapshot_path(self, snapshot: str) -> Path:
+        """快照放 ``build/bench/FY{year}/``，不进 ``build/FY{year}/``：
+
+        后者的每个子目录都被 ``ArtifactStore.units()`` 当成一家公司，快照混进去
+        会被数成第 N+1 家。
+        """
+        return self.build_dir / "bench" / f"FY{self.year}" / f"{snapshot}.json"
+
+    def snapshot_file(self, ref: str | Path) -> Path:
+        """``--bench-snapshot`` 接受 16 位 id 或任意路径。"""
+        p = Path(ref)
+        if p.is_file():
+            return p
+        q = self.bench_snapshot_path(str(ref))
+        if q.is_file():
+            return q
+        raise ValueError(
+            f"找不到对标快照 {str(ref)!r}：既不是文件，也不在 "
+            f"{self.bench_snapshot_path('<id>')}；先用 --freeze-bench 生成一次")
+
+    def freeze_bench(self, bench: Bench, snapshot: str) -> Path:
+        """把这次用的池子写下来，并在 ``_meta.json`` 里记一笔。"""
+        path = save_snapshot(bench, self.bench_snapshot_path(snapshot), snapshot=snapshot)
+        self.store.write_meta(snapshot=snapshot, bench_kind=bench.kind, bench_n=bench.n)
+        return path
+
+    # -- 6c 收集名单（谁进池、谁为什么没进）--------------------------------
+    def write_manifest(self, units: list[Unit], bench: Bench,
+                       snapshot: str) -> Path:
+        """每次运行都写一张名单。
+
+        为什么必须有它：目录少一份 PDF、或某家没披露流失率，池子都会「静默变小」。
+        前者是收集事故，后者是数据事实，两者在 ``bench.rows`` 里长得一样——只有名单
+        能把它们分开，也才回答得了「为什么 n 从 16 变 15」。
+        """
+        pool = {r.code for r in bench.rows}
+        rows: list[dict] = []
+        for u in units:
+            ry = u.facts.report_year if u.facts is not None else ""
+            cur = u.facts.value("turnover", ry) if u.facts is not None else None
+            prior_t = (stages.prior_values(u.facts, self.year, u.resolved)[0]
+                       if u.facts is not None else None)
+            if u.run.status != "ok":
+                reason = u.run.error or u.run.status
+            elif u.facts is None:
+                reason = "无抽数结果"
+            elif cur is None:
+                reason = "未披露本期流失率（A/B 均不进池）"
+            elif u.code not in pool:
+                reason = "不在本次对标池（外部表/快照里没有这个代码）"
+            else:
+                reason = "在池"
+            rows.append({
+                "code": u.code, "file": u.pdf.name, "status": u.run.status,
+                "report_year": ry, "turnover": cur, "prior_turnover": prior_t,
+                "in_pool": u.code in pool, "reason": reason, "snapshot": snapshot,
+            })
+        path = self.build_dir / f"FY{self.year}" / "manifest.csv"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        columns = ("code", "file", "status", "report_year", "turnover",
+                   "prior_turnover", "in_pool", "reason", "snapshot")
+        with path.open("w", encoding="utf-8-sig", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=columns)
+            w.writeheader()
+            w.writerows(rows)
+        return path
 
     # -- 7 打分 ----------------------------------------------------------
     def step_score(self, u: Unit, bench: Bench, snapshot: str) -> None:
@@ -458,7 +542,15 @@ class Pipeline:
                               model_version=MODEL_VERSION, bench=bench, snapshot=snapshot)
 
     # -- 全流程 ----------------------------------------------------------
-    def run(self, pdf: str | Path, prior_dir: str | Path | None = None) -> PipelineResult:
+    def run(self, pdf: str | Path, prior_dir: str | Path | None = None, *,
+            stop_after: str | None = None) -> PipelineResult:
+        """``stop_after="bench"``：采集 + 建池即返回，不算分、不发布。
+
+        这是「先收集、后一起算」的入参：采集期反复跑不会写工作簿，也就不会把
+        一份只有 3 家的半成品冲进交付目录。
+        """
+        if stop_after not in (None, "bench"):
+            raise ValueError(f"stop_after 只支持 None 或 bench，收到 {stop_after!r}")
         pdfs = scan(pdf)
         if not pdfs:
             raise FileNotFoundError(f"目录下没有 PDF：{pdf}")
@@ -496,10 +588,24 @@ class Pipeline:
             self._say(f"[定性] {u.code} ({self.qualitative})")
             self.step_qualitative(u)
 
-        # 5) 对标池 —— 全批屏障，必须等所有公司抽完
+        # 5) 对标池 —— 全批屏障（给了 --bench-snapshot 时改为读冻结池，不再屏障）
         bench = self.make_bench(live)
         snapshot = self.snapshot_id(bench)
+        if bench.kind != "none" and not self.bench_snapshot:
+            # 每一次建池都留档：可重放比省时间重要，文件只有几 KB
+            try:
+                path = self.freeze_bench(bench, snapshot)
+                self._say(f"[冻结] 对标池 {path}（n={bench.n}）")
+            except OSError as exc:
+                self._say(f"[提示] 对标池没能落盘：{exc}（本次分数不受影响，但不能重放）")
         self._say(f"[对标] {bench.kind} n={bench.n} 快照 {snapshot}")
+        manifest = self.write_manifest(units, bench, snapshot)
+        self._say(f"[名单] {manifest}")
+
+        if stop_after == "bench":
+            return PipelineResult(batch=None, runs=runs, bench=bench, stats=self.stats,
+                                  counts={}, snapshot=snapshot, manifest=manifest,
+                                  artifacts=self.store)
 
         # 6) 打分
         for u in live:
@@ -516,7 +622,8 @@ class Pipeline:
             if u.run.status == "ok" and u.run.card is None:
                 u.run.status = "无数据"
         return PipelineResult(batch=batch, runs=runs, bench=bench, stats=self.stats,
-                              counts=counts, snapshot=snapshot, artifacts=self.store)
+                              counts=counts, snapshot=snapshot, manifest=manifest,
+                              artifacts=self.store)
 
 
 # ---------------------------------------------------------------- 对外入口
@@ -524,16 +631,26 @@ def run_pipeline(pdf: str | Path, year: int, prior_dir: str | Path | None = None
                  *, build_dir: str | Path, bench_mode: str = "auto",
                  bench_csv: str | Path | None = None,
                  override_csv: str | Path | None = None, force: bool = False,
-                 qualitative: str = "llm", progress=None) -> PipelineResult:
+                 qualitative: str = "llm", progress=None,
+                 bench_snapshot: str | Path | None = None,
+                 freeze_bench: bool = False) -> PipelineResult:
     """跑完一年的全流程（含发布）。报告写不写由调用方决定。
 
     ``qualitative``：``llm``（默认；无 key 时自动退 ``keyword``）/ ``keyword``。
     两条都走定性判档：判档结论直接是 C 项与 S1.1.3/4/5 的分。
+
+    ``bench_snapshot``：用冻结的对标池（16 位 id 或文件路径），跳过批内建池。
+    ``freeze_bench``：只采集 + 建池并落快照，不算分、不发布（返回 ``batch=None``）。
     """
+    if bench_snapshot and freeze_bench:
+        raise ValueError("--bench-snapshot 是读回旧池子，--freeze-bench 是新建池子，二者只能给一个")
+    if freeze_bench and bench_mode == "none" and not bench_snapshot:
+        raise ValueError("--freeze-bench 需要 auto 或 csv：none 没有池子可冻结")
     pipe = Pipeline(year, build_dir, force=force, progress=progress,
                     override_csv=override_csv, bench_mode=bench_mode,
-                    bench_csv=bench_csv, qualitative=qualitative)
-    return pipe.run(pdf, prior_dir)
+                    bench_csv=bench_csv, qualitative=qualitative,
+                    bench_snapshot=bench_snapshot)
+    return pipe.run(pdf, prior_dir, stop_after="bench" if freeze_bench else None)
 
 
 def score_batch(pdf: str | Path, year: int = 2025, prior_dir: str | Path | None = None,

@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>S1.1 判档分歧</title>
+<link rel="stylesheet" href="disputes.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap topbar">
+    <div class="brand">
+      <h1>S1.1 判档分歧</h1>
+      <span class="tag" id="year-tag" hidden></span>
+    </div>
+    <p class="meta" id="meta">加载中…</p>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <section class="card upload-card">
+    <div class="card-head">
+      <h2>单家判档</h2>
+      <span class="cost" id="cost">15 次模型调用</span>
+    </div>
+    <div id="drop" class="drop" title="同一份报告重判可能换档；与批量结果不一致时以两次多数派为准">
+      <span class="drop-icon" aria-hidden="true">PDF</span>
+      <span class="drop-main">拖入报告，或 <label class="link">选择文件<input
+        type="file" id="file" accept="application/pdf,.pdf" hidden></label></span>
+    </div>
+    <div class="progress" id="progress" hidden>
+      <div class="bar"><i id="bar"></i></div>
+      <p class="step" id="step">准备中…</p>
+    </div>
+    <div id="error" class="error" hidden></div>
+  </section>
+
+  <section id="company" hidden>
+    <div class="card company-head">
+      <div class="company-title">
+        <h2 id="company-name">—</h2>
+        <p class="meta" id="company-meta"></p>
+      </div>
+      <div class="pills" id="company-verdict"></div>
+    </div>
+    <div id="cards" class="cards"></div>
+  </section>
+
+  <section class="card" id="summary-section">
+    <div class="card-head summary-head">
+      <div>
+        <h2>全批总汇</h2>
+        <p class="meta" id="summary-meta">加载中…</p>
+      </div>
+      <div class="toolbar">
+        <div class="seg" id="filter" role="group" aria-label="筛选">
+          <button type="button" data-filter="all" class="on">全部</button>
+          <button type="button" data-filter="split">仅有分歧</button>
+        </div>
+        <input id="search" type="search" placeholder="搜索公司或代码" autocomplete="off">
+      </div>
+    </div>
+    <div class="stats" id="stats"></div>
+    <div class="legend">
+      <span class="lg ok">一致</span>
+      <span class="lg sp">分歧</span>
+      <span class="lg gt">闸门</span>
+      <span class="lg hint">点击格子查看理由</span>
+    </div>
+    <div class="matrix-wrap" id="matrix"></div>
+    <p class="empty" id="empty" hidden>没有符合条件的公司</p>
+  </section>
+
+</main>
+
+<footer class="wrap foot"><span class="dot"></span>只读 · 不写 build/ 与交付目录</footer>
+
+<div id="detail" class="drawer" hidden>
+  <div class="backdrop" id="dbackdrop"></div>
+  <aside class="panel" role="dialog" aria-modal="true" aria-label="判档详情">
+    <div id="detail-body"></div>
+  </aside>
+</div>
+
+<script src="disputes.js"></script>
+</body>
+</html>

@@ -106,6 +106,22 @@ class TestParsing(unittest.TestCase):
             keywords_io.load(Path(tempfile.gettempdir()) / "不存在的词表.csv")
         self.assertIn(keywords_io.ENV_NAME, str(ctx.exception))
 
+    def test_interleaved_rows_keep_their_group(self):
+        """同组的行被别的组隔开时，词仍归自己那组。
+
+        回归用例：加载器早先按「追加到最后一组」实现，Excel 里排序或中间插一行，
+        词就会静默落到相邻组名下（组表看着对、其实串了组），加词时很难发现。
+        """
+        text = (HEADER
+                + "S1.1.1-C,E1 劳动合同保障,劳动合同,是\n"
+                + "S1.1.1-C,E2 解雇及裁员程序,termination,是\n"
+                + "S1.1.1-C,E1 劳动合同保障,employment contract,是\n")
+        got = self._load(text, known=("S1.1.1-C",))
+        groups = got["S1.1.1-C"]
+        self.assertEqual([g for g, _ in groups], ["E1 劳动合同保障", "E2 解雇及裁员程序"])
+        self.assertEqual(dict(groups)["E1 劳动合同保障"], ("劳动合同", "employment contract"))
+        self.assertEqual(dict(groups)["E2 解雇及裁员程序"], ("termination",))
+
 
 class TestEnvOverride(unittest.TestCase):
     """``ESG_S11_KEYWORDS`` 指到别的文件时，default_path() 必须跟着走。"""

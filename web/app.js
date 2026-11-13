@@ -153,7 +153,8 @@
       <p class="foot">
         <span>FY${esc(meta.year)}</span>
         <span>定性 ${meta.mode === 'llm' ? 'LLM 判档' : '关键词兜底'}</span>
-        <span>对标 n=${esc(meta.bench_n)}</span>
+        <span>对标 n=${esc(meta.bench_n)}${meta.bench_n_improve != null && meta.bench_n_improve !== meta.bench_n
+          ? `（改善率 ${esc(meta.bench_n_improve)}）` : ''}</span>
         <span>生成 ${esc(meta.generated)}</span>
       </p>`;
     writeHash();

@@ -70,6 +70,7 @@ def load(path: str | Path | None = None,
     rows = _read_rows(p)
     groups: dict[str, list[list]] = {}
     seen: dict[tuple[str, str], set[str]] = {}
+    bucket: dict[tuple[str, str], list] = {}      # (指标, 组名) → 那一组的词列表
     for lineno, row in rows:
         ind = (row.get(COL_IND) or "").strip()
         word = (row.get(COL_WORD) or "").strip()
@@ -92,12 +93,15 @@ def load(path: str | Path | None = None,
         key = (ind, group)
         if key not in seen:
             seen[key] = set()
-            groups.setdefault(ind, []).append([group, []])
+            bucket[key] = [group, []]
+            groups.setdefault(ind, []).append(bucket[key])
         # 同一个词在一个组里写两遍没有意义（匹配只看「有没有命中」），去重但保留首次位置
         if word in seen[key]:
             continue
         seen[key].add(word)
-        groups[ind][-1][1].append(word)
+        # 按 (指标, 组名) 归位，而不是追加到「最后一组」：Excel 里排序/插行会把同组的行
+        # 打散，若按位置追加，词会静默落到相邻组名下（组表看着对、其实串了组）。
+        bucket[key][1].append(word)
     return {ind: tuple((g, tuple(ws)) for g, ws in gs) for ind, gs in groups.items()}
 
 

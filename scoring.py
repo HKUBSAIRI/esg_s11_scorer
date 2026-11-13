@@ -9,6 +9,8 @@
    缺判档就抛错——静默拼分只会产出与交付物不一致的数。
 3. **A/B 分位优先用对标池**：有对标池 → 按同业分位取档；无对标池 → A 记 N/A，
    B 退化为「改善率方向」（与 10 份样本专家口径一致，便于横向比较）。
+   「有池子、但该指标可比的家数不足」不等于「没有池子」：前者记 N/A，不退方向判定。
+   分位分母只数该指标有值的家数（``Bench.peer_n``），n/a 的公司既不算位次也不算分母。
 
 本模块只做算术：输入是抽取到的数值与判档结论，输出是分数。不再有词法判定层。
 """
@@ -16,7 +18,7 @@ from __future__ import annotations
 
 from .bench import Bench
 from .config import (GAP_B_FLOOR, GAP_BANDS, GAP_IMPROVE_FULL, GAP_NEAR_ZERO,
-                     IND_NAMES, IND_WEIGHTS, SPECS)
+                     IND_NAMES, IND_WEIGHTS, MIN_PEER_N, SPECS)
 from .metrics import improvement
 from .models import Component, IndScore, ScoreCard, ScoreData
 from .qualitative import Verdict
@@ -66,13 +68,18 @@ def score_s111(turnover, prior, bench: Bench, code: str,
     pct_a = (bench.percentile(code, "turnover", higher_better=False)
              if turnover is not None else None)
     if pct_a is None:
-        comps.append(Component("A", "同业流失率对标", 0.4, None,
-                               "无对标池或缺本期流失率，A 不评" if turnover is None
-                               else f"对标池样本不足（n={bench.n}）或本家无值，A 不评",
-                               ev))
+        if turnover is None:
+            note = "缺本期流失率，A 不评"
+        elif bench.kind == "none":
+            note = "无对标池，A 不评"
+        else:
+            note = (f"对标池里可比的家数不足（n={bench.peer_n('turnover')}"
+                    f" < {MIN_PEER_N}），A 不评")
+        comps.append(Component("A", "同业流失率对标", 0.4, None, note, ev))
     else:
         comps.append(Component("A", "同业流失率对标", 0.4, bench.band(pct_a),
-                               f"流失率 {turnover:.2f}% → 同业分位 {pct_a:.0f}%（{bench.kind}, n={bench.n}）",
+                               f"流失率 {turnover:.2f}% → 同业分位 {pct_a:.0f}%"
+                               f"（{bench.kind}, n={bench.peer_n('turnover')}）",
                                ev))
     # B 同业趋势对标
     imp = improvement(turnover, prior)
@@ -86,12 +93,20 @@ def score_s111(turnover, prior, bench: Bench, code: str,
         pct_b = bench.percentile(code, "improvement", higher_better=True)
         if pct_b is not None:
             comps.append(Component("B", "同业趋势对标", 0.3, bench.band(pct_b),
-                                   f"改善率 {imp:+.2f}% → 同业分位 {pct_b:.0f}%（{bench.kind}, n={bench.n}）",
+                                   f"改善率 {imp:+.2f}% → 同业分位 {pct_b:.0f}%"
+                                   f"（{bench.kind}, n={bench.peer_n('improvement')}）",
                                    ev))
-        else:
+        elif bench.kind == "none":
             # 无对标池：退化为「改善率方向」，与 10 份样本专家口径一致
             comps.append(Component("B", "同业趋势对标", 0.3, 100 if imp > 0 else 0,
                                    f"改善率 {imp:+.2f}%（无对标池，按改善方向取档）",
+                                   ev))
+        else:
+            # 有池子，但可算改善率的家数不够（上期值缺失的公司不进分母）：
+            # 记 N/A，而不是拿池子规模当分母硬算一个分位。
+            comps.append(Component("B", "同业趋势对标", 0.3, None,
+                                   f"对标池里可算改善率的家数不足（n="
+                                   f"{bench.peer_n('improvement')} < {MIN_PEER_N}），B 不评",
                                    ev))
     # C 披露质量与就业终止保障：取判档结论
     comps.append(Component("C", "披露质量与就业终止保障", 0.3, int(verdict.tier),

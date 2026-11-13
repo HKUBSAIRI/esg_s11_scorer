@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import esg_s11_scorer  # noqa: F401  （触发 sys.path 注入 ESG_insight/app）
 from esg_s11_scorer import scoring
-from esg_s11_scorer.bench import from_rows
+from esg_s11_scorer.bench import Bench, from_rows
 from esg_s11_scorer.config import GAP_B_FLOOR, GAP_NEAR_ZERO
 from esg_s11_scorer.models import PeerRow
 from esg_s11_scorer.qualitative import Verdict
@@ -121,6 +121,68 @@ class TestGapTrendBands(unittest.TestCase):
         s = scoring.score_s112(None, None, verdict=_verdict(100, "S1.1.2-C"))
         self.assertIsNone(s.components[0].score)
         self.assertIsNone(s.components[1].score)
+
+
+class TestPeerDenominatorExcludesNA(unittest.TestCase):
+    """同业分位的分母只数「该指标有值」的家数。
+
+    一家有本期流失率、却没有上期值，它进 A 的分母、不进 B 的分母。把它算进 B 的分母，
+    等于让一个不可比的公司占掉一个位次——别人凭空退后一档，而它自己也拿不到分。
+    这两处都只改数、不报错，批跑看不出来，只能靠这里钉住。
+    """
+
+    def _pool(self):
+        """P4 有本期、没上期：A 项 4 家，B 项 3 家。"""
+        return from_rows([
+            PeerRow("P1", 2025, 5.0, 6.0),
+            PeerRow("P2", 2025, 6.0, 7.0),
+            PeerRow("P3", 2025, 7.0, 8.0),
+            PeerRow("P4", 2025, 8.0, None),
+        ], "auto")
+
+    def test_pool_size_differs_by_metric(self):
+        b = self._pool()
+        self.assertEqual(b.n, 4, "池子规模仍按「有本期流失率」数")
+        self.assertEqual(b.peer_n("turnover"), 4)
+        self.assertEqual(b.peer_n("improvement"), 3)
+        self.assertIsNone(b.percentile("P4", "improvement", True),
+                          "没有上期值 → 改善率 n/a，不该拿到位次")
+
+    def test_na_company_not_counted_in_denominator(self):
+        b = self._pool()
+        # 分母 3：改善最差的 P3 拿 100；若把 P4 也算进分母，P3 会变成 75 分档
+        self.assertEqual(b.percentile("P3", "improvement", True), 100.0)
+        self.assertEqual(b.band(b.percentile("P3", "improvement", True)), 0)
+        self.assertEqual(b.percentile("P1", "improvement", True), 33.3)
+
+    def test_note_reports_per_metric_n(self):
+        """报告里的「n=」必须是该指标的有效家数，不是池子规模。"""
+        s = scoring.score_s111(5.0, 6.0, self._pool(), "P1", verdict=_verdict(100))
+        a = next(x for x in s.components if x.key == "A")
+        b = next(x for x in s.components if x.key == "B")
+        self.assertIn("n=4", a.note)
+        self.assertIn("n=3", b.note, "B 项应写改善率有效家数 3，不是池子规模 4")
+
+    def test_too_few_comparable_is_na_not_direction(self):
+        """有池子、但该指标可比家数 <3 → N/A；不能退回「改善为正就记 100」。"""
+        b = from_rows([
+            PeerRow("P1", 2025, 5.0, 6.0),
+            PeerRow("P2", 2025, 6.0, 7.0),
+            PeerRow("P3", 2025, 7.0, None),
+        ], "auto")
+        self.assertEqual(b.n, 3)
+        self.assertEqual(b.peer_n("improvement"), 2)
+        s = scoring.score_s111(6.0, 7.0, b, "P2", verdict=_verdict(100))
+        a = next(x for x in s.components if x.key == "A")
+        bb = next(x for x in s.components if x.key == "B")
+        self.assertIsNotNone(a.score, "A 项 3 家可比，应当正常出分")
+        self.assertIsNone(bb.score, "改善率只有 2 家可比 → N/A，不是方向兜底")
+        self.assertIn("可算改善率", bb.note)
+
+    def test_no_pool_still_falls_back_to_direction(self):
+        """真的没有池子，才走「改善为正即 100」的兜底——两种 N/A 不能混。"""
+        s = scoring.score_s111(6.0, 7.0, Bench(kind="none"), "P1", verdict=_verdict(100))
+        self.assertEqual(next(x for x in s.components if x.key == "B").score, 100)
 
 
 if __name__ == "__main__":

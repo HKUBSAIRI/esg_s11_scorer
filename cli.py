@@ -18,6 +18,10 @@
     # 只看结果不写文件 / 用另一个配置文件
     python -m esg_s11_scorer --dry-run --env-file .env.2026
 
+    # 先收集、后算分：第一次只采集并冻结对标池，之后带着快照算
+    python -m esg_s11_scorer --freeze-bench
+    python -m esg_s11_scorer --bench-snapshot 5d15888ffac3888c
+
 配置优先级：``--参数`` > 进程环境变量 > ``.env`` > 默认值（详见 ``settings.py``）。
 """
 from __future__ import annotations
@@ -50,6 +54,11 @@ def build_parser(settings: Settings) -> argparse.ArgumentParser:
                    help="A/B 对标来源：auto=批内分位（默认）；csv=外部对标表；none=不评")
     p.add_argument("--bench-csv", default=settings.bench_csv,
                    help="外部对标表（code,year,turnover,prior_turnover）；默认 ESG_BENCH_CSV")
+    p.add_argument("--bench-snapshot", default=None, metavar="ID|PATH",
+                   help="读回冻结的对标池（优先于 --bench）：--freeze-bench 写出的 16 位 id "
+                        "或任意快照文件路径")
+    p.add_argument("--freeze-bench", action="store_true",
+                   help="只采集并冻结对标池，不算分、不写报告：先收齐、后一起算的第一步")
     p.add_argument("--override", default=settings.override_csv,
                    help="人工兜底值 CSV（code,field,year,value,reason）；默认 ESG_OVERRIDE_CSV")
     p.add_argument("--out", default=str(settings.out_dir),
@@ -187,13 +196,19 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     progress = None if args.quiet else (lambda s: print(s, file=sys.stderr))
+    if args.freeze_bench and args.bench == "none":
+        print("[错误] --freeze-bench 需要 --bench auto 或 csv（none 没有池子可冻结）",
+              file=sys.stderr)
+        return 2
     try:
         result = run_pipeline(
             pdf, args.year, args.prior_dir,
             build_dir=Path(args.build_dir),
             bench_mode=args.bench, bench_csv=args.bench_csv,
             override_csv=args.override, force=args.force,
-            qualitative=args.qualitative, progress=progress)
+            qualitative=args.qualitative, progress=progress,
+            bench_snapshot=args.bench_snapshot,
+            freeze_bench=args.freeze_bench)
     except FileNotFoundError as exc:
         print(f"[错误] {exc}", file=sys.stderr)
         return 2
@@ -205,6 +220,25 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     batch, bench = result.batch, result.bench
+    if args.freeze_bench:
+        snap_path = Path(args.build_dir) / "bench" / f"FY{args.year}" / f"{result.snapshot}.json"
+        print(f"\n{MODEL_VERSION} | 报告年度 {args.year} | 仅采集 + 冻结（未算分、未写报告）")
+        print(f"对标：{bench.note}")
+        print(f"快照：{result.snapshot}  →  {snap_path}")
+        print(f"名单：{result.manifest}（谁进池、谁为什么没进都在这张表）")
+        if bench.rows:
+            print(f"\n{'代码':<7}{'流失率':>9}{'上期':>9}  出处")
+            for r in bench.rows:
+                prior = "—" if r.prior_turnover is None else f"{r.prior_turnover:.2f}"
+                print(f"{r.code:<7}{r.turnover:>9.2f}{prior:>9}  {r.source}")
+        for r in result.runs:
+            if r.status != "ok":
+                print(f"  [跳过] {Path(r.pdf).name}：{r.status} {r.error}".rstrip())
+        print(f"\n[下一步] 算分：python -m esg_s11_scorer --bench-snapshot {result.snapshot}")
+        print("         （采集产物走缓存：不会重解析 PDF，也不会重调判档模型）")
+        return 0
+
+    assert batch is not None, "非冻结模式下必须发布批次"
     ok = batch.views
     print(f"\n{MODEL_VERSION} | 报告年度 {args.year} | 文件 {batch.total} 份，成功 {len(ok)} 份")
     print(f"对标：{bench.note}（快照 {result.snapshot}）")

@@ -25,9 +25,12 @@ from s11_text import Doc, sentences
 
 from .blind import PLACEHOLDER, Blinder
 from .llm import LLM, LLMError, chat_json
-from .rubric import LEVEL_WORDS, Rubric
+from .rubric import (LEVEL_WORDS, KEYWORD_RECALL_LIMIT, RECALL_LIMIT, Rubric,
+                     baseline_groups)
 
-RECALL_LIMIT = 12          # 每次判档最多看几段（太多会稀释注意力，也让 token 失控）
+# ``RECALL_LIMIT``（24）与 ``KEYWORD_RECALL_LIMIT``（12）的取值与理由在 ``rubric.py``：
+# 它们是判档口径，要进 ``rubric_hash()``。12→24 的由来见 rubric.py 的常量注释与
+# 2026-11-09 的 GT 对账（9 条证据卡在 13–31 名，提到 24 救回 6 条）。
 PASSAGE_CHARS = 420        # 单段展示上限：PDF 文本块本身已 ≤380，这里只防异常长块
 
 SYSTEM = (
@@ -114,6 +117,15 @@ def _match(low: str, kw: str) -> bool:
 def _hits(low: str, keywords: tuple[str, ...]) -> int:
     """命中多少个**不同**关键词（重复披露不增加权重，与细则「同义词不增证据组数」一致）。"""
     return sum(1 for k in keywords if _match(low, k))
+
+
+def match_word(low: str, kw: str) -> bool:
+    """单个关键词是否命中（``low`` 需先 ``lower()``）——``_match`` 的公开别名。
+
+    查看器（``explorer``）要按同一条规则标出「这段命中了哪些词」。再写一份
+    「英文词首匹配」的副本，迟早会和判档口径漂移；``MATCH_VERSION`` 只描述这一份实现。
+    """
+    return _match(low, kw)
 
 
 # 「命中很多、信息为零」的两类段落。实测：港交所那句「遵守对发行人重大影响的法规……
@@ -300,11 +312,24 @@ def judge(doc: Doc, rubric: Rubric, llm: LLM | None = None, *,
         try:
             return judge_llm(rubric, passages, llm, blinder)
         except LLMError as exc:
-            fb = judge_keyword(rubric, passages)
+            fb = _judge_keyword_baseline(doc, rubric)
             fb.reason = f"{fb.reason}（LLM 降级：{exc}）"[:400]
             return fb
-    return judge_keyword(rubric, passages)
+    return _judge_keyword_baseline(doc, rubric)
+
+
+def _judge_keyword_baseline(doc: Doc, rubric: Rubric) -> Verdict:
+    """兜底判档：用**冻结的 v1.4 词表**重新召回前 12 段再判。
+
+    为什么不复用 ``recall(doc, rubric)`` 的结果：召回词表可以一直扩（GT 对账在加同义词），
+    但兜底是回归基线，加词会改变排序与前 12 段的内容，档位就跟着漂。两条路各用一套词，
+    才既能扩召回、又不动基线。见 ``rubric.BASELINE_EXCLUDED``。
+    """
+    from dataclasses import replace
+
+    base = replace(rubric, groups=baseline_groups(rubric))
+    return judge_keyword(base, recall(doc, base, limit=KEYWORD_RECALL_LIMIT))
 
 
 __all__ = ["Passage", "Verdict", "recall", "judge", "judge_llm", "judge_keyword",
-           "evidence_levels", "RECALL_LIMIT"]
+           "evidence_levels", "match_word", "RECALL_LIMIT", "KEYWORD_RECALL_LIMIT"]

@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import matplotlib
@@ -19,6 +20,9 @@ plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei"]
 plt.rcParams["axes.unicode_minus"] = False
 
 HERE = Path(__file__).resolve().parent
+# 版本号从 config 读，别在标题里手写：改口径忘了改图，图就成了过期口径的「证据」
+sys.path.insert(0, str(HERE.parents[1]))
+from esg_s11_scorer.config import MODEL_VERSION  # noqa: E402
 
 C_IN = ("#E9EFF8", "#5C7FA8")
 C_QTY = ("#DCE9F8", "#3C6DA5")      # 定量支路
@@ -65,7 +69,7 @@ def main() -> Path:
     ax.set_aspect("equal")
     ax.axis("off")
 
-    ax.text(90, 101.2, "esg_s11_scorer · 当前管道：定量分档 + 定性判档（s11-model-1.3）",
+    ax.text(90, 101.2, f"esg_s11_scorer · 当前管道：定量分档 + 定性判档（{MODEL_VERSION}）",
             ha="center", va="center", fontsize=16.5, fontweight="bold", color=INK)
     ax.text(90, 96.6,
             "输入 1–N 份 ESG 报告 PDF  →  五项指标分（严格 / 归一 / 可达上限）+ 分项证据 + 批内分位",
@@ -107,7 +111,7 @@ def main() -> Path:
 
     # ---- 定性支路 --------------------------------------------------------
     box(ax, 44, 30, 26, 14,
-        "召回段落", ["E/P/T/W/D 证据组", "命中数取前 12 段"],
+        "召回段落", ["E/P/T/W/D 证据组", "命中数取前 24 段"],
         "keywords.csv", pal=C_QLT)
     box(ax, 72, 30, 26, 14,
         "盲评脱敏", ["公司名→[COMPANY]", "有残留即不发送"],

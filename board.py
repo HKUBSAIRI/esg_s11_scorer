@@ -245,6 +245,9 @@ def build(codes: list[str] | None = None, *, year: int = 2025,
             "mode": mode,
             "bench": bench.note,
             "bench_n": bench.n,
+            # 改善率的可比家数单列：分母只数「本期与上期都有值」的公司，
+            # 与 A 项常常不是一个数（当前 16 vs 9），页面直接写池子规模会骗人。
+            "bench_n_improve": bench.peer_n("improvement"),
             "count": len(companies),
         },
         "companies": companies,

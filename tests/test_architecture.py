@@ -22,7 +22,8 @@ from pathlib import Path
 PKG = Path(__file__).resolve().parents[1]
 
 RENDER = {"report", "scoreviz", "qualviz", "keyword_table"}       # 只出 xlsx
-ORCHESTRATION = {"pipeline", "cli", "calibrate", "__main__"}        # 调度/入口
+ORCHESTRATION = {"pipeline", "cli", "calibrate", "ensemble", "disputes",
+                 "__main__"}  # 调度/入口
 PURE = {"extract", "bench", "scoring", "metrics", "models", "stages"}
 STORAGE = {"store", "tables"}                                       # 落盘/gold 表
 STYLE = "xlstyle"

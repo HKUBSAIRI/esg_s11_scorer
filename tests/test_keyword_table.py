@@ -32,7 +32,11 @@ class TestRows(unittest.TestCase):
     def test_all_words_present_once(self):
         total = sum(len(r.keywords) for r in RUBRICS.values())
         self.assertEqual(len(SEP.join(w for _, w in table_rows()).split(SEP)), total)
-        self.assertEqual(total, 350)
+        # 381 = v1.4 的 350 + 31 个 GT 对账补的英文同义词（internal transfer / 晋升 /
+        # human rights / 产假 / tuition / competency / child labour）。
+        # 注意：这些词只进「送 LLM」的召回，兜底仍用 v1.4 的 350 词（rubric.BASELINE_EXCLUDED），
+        # 所以加词不会动回归基线。
+        self.assertEqual(total, 381)
 
 
 class TestWorkbook(unittest.TestCase):

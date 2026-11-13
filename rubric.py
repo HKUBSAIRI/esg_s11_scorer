@@ -31,9 +31,45 @@ from dataclasses import dataclass, replace
 
 from . import keywords_io
 
-RUBRIC_VERSION = "rubric-1.2"
-PROMPT_VERSION = "qual-prompt-1.0"
+RUBRIC_VERSION = "rubric-1.3"         # 1.3：判据措辞补「合法雇佣/禁童工」「第三方审计/人权尽责作执行证据」
+PROMPT_VERSION = "qual-prompt-1.1"    # 1.1：召回段数 12→24，提示词里的【报告段落】变长，旧判档缓存须失效
 MATCH_VERSION = "match-head-1.1"      # 匹配规则版本：英文词首匹配 + 套话/索引行降权
+
+# 召回口径（段数）放在这里而不是 qualitative.py：它和词表一样是**判档口径**，
+# 要进 rubric_hash()，否则改段数会静默复用旧判档。见 §2026-11-09 GT 对账。
+RECALL_LIMIT = 24          # 送给 LLM 判档的最多段数（12→24：GT 对账时 9 条证据卡在 13–31 名）
+KEYWORD_RECALL_LIMIT = 12  # 关键词兜底只看前 12 段：兜底是安全网，口径「宁低不高」；
+#                            段数一多，凑齐「制度＋执行」两层词就容易得多（实测 02269 的
+#                            S1.1.1-C 会从 50 跳到 100，而人工举证表判 50）。
+
+# 兜底词表冻结在 v1.4（350 词）：召回词表是**可以继续扩**的（GT 对账一直在往里加同义词），
+# 但兜底是确定性回归基线，加词会把它顶歪——实测 child labour 让 02269/03692 的 S1.1.1
+# 从 50 跳到 100（GT 判 50 / 15）。所以两条路用两套词：
+#   · 送 LLM：全量词表（越全越好）
+#   · 兜底  ：扣掉下面这些「v1.5 之后新增」的词，等于仍然是 v1.4 的 350 词
+# 新增词时必须同步登记到这里，否则基线会悄悄漂移。见 tests/test_qualitative.py。
+BASELINE_EXCLUDED: dict[str, frozenset[str]] = {
+    "S1.1.1-C": frozenset({"internal transfer", "reassignment",
+                           "child labour", "child labor", "童工", "未成年工", "年龄核实"}),
+    "S1.1.3": frozenset({"产假", "陪产假", "育儿假", "maternity leave", "paternity leave",
+                         "parental leave", "human rights", "人权"}),
+    "S1.1.4": frozenset({"tuition"}),
+    "S1.1.5": frozenset({"晋升", "晉升", "内部竞聘", "竞聘", "职业发展路径",
+                         "internal promotion", "promotion criteria", "internal recruitment",
+                         "career path", "career development", "human rights", "人权",
+                         "competency", "job requirements", "fair recruitment"}),
+}
+
+
+def baseline_groups(rub: "Rubric") -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """兜底用的词表：现行词表扣掉 ``BASELINE_EXCLUDED`` 里登记的词（= v1.4 的 350 词）。"""
+    drop = BASELINE_EXCLUDED.get(rub.key, frozenset())
+    groups = []
+    for group, words in rub.groups:
+        kept = tuple(w for w in words if w not in drop)
+        if kept:
+            groups.append((group, kept))
+    return tuple(groups)
 
 @dataclass(frozen=True)
 class Rubric:
@@ -87,13 +123,15 @@ _SPECS: tuple[Rubric, ...] = (
     Rubric(
         key="S1.1.1-C", ind="S1.1.1", part="C", name="披露质量与就业终止保障",
         tiers={
-            100: "建立明确的劳动合同、解雇及员工安置保障制度；详细披露离职率构成，"
-                 "提供实际离职保障结果或纠正成效的充分证据。",
-            50: "建立劳动合同管理及合法解雇制度，但缺乏实际保障结果或纠正成效的充分证据；"
-                "或仅有原则性声明。",
+            100: "建立明确的劳动合同、合法雇佣（含禁止童工与入职年龄核实）、解雇及员工安置保障制度；"
+                 "详细披露离职率构成，提供实际离职保障结果或纠正成效的充分证据。",
+            50: "建立劳动合同管理、合法雇佣（禁止童工、年龄核实）及合法解雇制度，"
+                "但缺乏实际保障结果或纠正成效的充分证据；或仅有原则性声明。",
             0: "未识别到相关内容；或未披露离职率。",
         },
-        note="离职率构成＝自愿/非自愿拆分或留存率反推；仅写「依法用工」不算制度。",
+        note="离职率构成＝自愿/非自愿拆分或留存率反推；仅写「依法用工」不算制度。"
+             "「禁止童工／入职年龄核实」属**制度层**证据，可佐证合法雇佣，"
+             "但单凭它不构成执行结果，不能据此给 100 分。",
         gate="未披露本期离职率",
     ),
     # ---- S1.1.2 C
@@ -113,15 +151,16 @@ _SPECS: tuple[Rubric, ...] = (
         key="S1.1.3", ind="S1.1.3", part="", name="工作时间与休息休假保障",
         tiers={
             100: "建立明确的工作时间、加班管理及休息休假保障制度，并提供可核验的执行证据"
-                 "（如工时监测、休假执行数据、覆盖情况或针对不合理工时问题的纠正成果）。",
+                 "（如工时监测、休假执行数据、覆盖情况、针对不合理工时问题的纠正成果，"
+                 "或第三方／客户／人权尽责对工时合规的审计与尽调结论）。",
             50: "披露工作时间与休息休假保障制度，但未披露具体实施措施（如工时记录、加班审批或"
                 "休假管理程序），缺乏充分的实际执行结果或改善成效证据；或仅声明性文件。",
             0: "未识别到相关内容；或存在经核实的严重超时工作、违法剥夺休息休假权利等情况且"
                "未采取有效纠正措施。",
         },
         note="「员工依法享有年假」只说明权利；「用系统跟踪/记录休假」「设有工时系统」是手段，"
-             "不等于执行结果——要有休假使用率、实际休假天数、覆盖比例，或超时问题的检查与整改结论"
-             "才算执行证据。加班费支付归 S1.1.2。",
+             "不等于执行结果——要有休假使用率、实际休假天数、覆盖比例、超时问题的检查与整改结论，"
+             "或第三方审计／客户审计／人权尽责对工时合规给出的结论，才算执行证据。加班费支付归 S1.1.2。",
     ),
     # ---- S1.1.4
     Rubric(
@@ -148,7 +187,8 @@ _SPECS: tuple[Rubric, ...] = (
             0: "未识别到相关内容；或存在经核实的严重、持续性歧视、骚扰或系统性机会不公平，且未有效纠正。",
         },
         note="制度存在不等于已执行；没有已识别事件时不要求个案统计。"
-             "「反腐败」「商业道德」不能替代反骚扰。",
+             "「反腐败」「商业道德」不能替代反骚扰。"
+             "人权尽责／客户审计中对平等机会、反歧视执行情况的审查结论，可作执行证据。",
     ),
 )
 
@@ -196,12 +236,17 @@ def rubric_hash() -> str:
 
     ``MATCH_VERSION`` 也进指纹：改的是「怎么匹配」（比如英文改成词首匹配），
     词表一个字没动，召回结果却会变——不带上它，旧结论会被静默复用。
+
+    ``RECALL_LIMIT`` / ``KEYWORD_RECALL_LIMIT`` 同理：段数改了，送模型的段落与兜底档位
+    都会变，不进指纹就会复用 12 段时算出的旧判档。
     """
     payload = "|".join(
         f"{r.key}:{r.tiers}:{sorted(r.keywords)}:{r.note}:{r.gate}"
         for r in sorted(RUBRICS.values(), key=lambda x: x.key))
     return hashlib.sha256(
-        f"{RUBRIC_VERSION}|{PROMPT_VERSION}|{MATCH_VERSION}|{payload}".encode("utf-8")).hexdigest()[:12]
+        f"{RUBRIC_VERSION}|{PROMPT_VERSION}|{MATCH_VERSION}|"
+        f"{RECALL_LIMIT}|{KEYWORD_RECALL_LIMIT}|{payload}".encode("utf-8")).hexdigest()[:12]
 
 __all__ = ["Rubric", "RUBRICS", "QUALITATIVE_PARTS", "LEVEL_WORDS",
-           "RUBRIC_VERSION", "PROMPT_VERSION", "MATCH_VERSION", "rubric_hash"]
+           "RUBRIC_VERSION", "PROMPT_VERSION", "MATCH_VERSION",
+           "RECALL_LIMIT", "KEYWORD_RECALL_LIMIT", "rubric_hash"]

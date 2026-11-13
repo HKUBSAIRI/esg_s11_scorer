@@ -189,6 +189,8 @@ class Settings:
     llm_model: str = ""
     llm_api_key: str = ""
     llm_thinking: bool = False
+    # 三路独立判档（ensemble.py，只采集不出分）的投票人名单；空 = 主模型三个温度
+    ensemble_voters: str = ""
     # 外部资源：MySQL（备用，打分链路不读）与 GPU 服务器账号（同上）
     db_host: str = ""
     db_port: int = DEFAULT_DB_PORT
@@ -231,6 +233,7 @@ class Settings:
         ("ESG_LLM_MODEL", "llm_model", "text"),
         ("ESG_LLM_THINKING", "llm_thinking", "text"),
         ("ESG_LLM_API_KEY", "llm_api_key", "secret"),
+        ("ESG_ENSEMBLE_VOTERS", "ensemble_voters", "text"),
         ("ESG_DB_HOST", "db_host", "text"),
         ("ESG_DB_PORT", "db_port", "text"),
         ("ESG_DB_USER", "db_user", "text"),
@@ -448,6 +451,12 @@ def build(env_file: str | Path | None = None) -> Settings:
         warnings.append("配了 ESG_LLM_BASE_URL / ESG_LLM_MODEL 但缺 ESG_LLM_API_KEY，"
                         "定性判档将退回关键词兜底")
 
+    # 三路独立判档（``ensemble.py``，只采集、不出分）：投票人名单，形如
+    # ``qwen-plus@0.7,qwen-max@0.7``。留空 = 主模型 + 三个温度，不需要额外配置。
+    ensemble_voters, src = lay.raw("ESG_ENSEMBLE_VOTERS")
+    sources["ESG_ENSEMBLE_VOTERS"] = (src if ensemble_voters
+                                      else "默认（主模型 0.0/0.7/0.9）")
+
     # 外部资源：只做「取值 + 自检」，不连网。缺项不算错（打分链路用不到），
     # 但半配（比如给了 host 忘了库名）要出声——否则将来第一次连库才发现少一项。
     def text(name: str) -> str:
@@ -504,6 +513,7 @@ def build(env_file: str | Path | None = None) -> Settings:
         alias_csv=alias_csv,
         llm_base_url=llm_base_url, llm_model=llm_model, llm_api_key=llm_api_key,
         llm_thinking=llm_thinking,
+        ensemble_voters=ensemble_voters,
         db_host=db_host, db_port=db_port, db_user=db_user, db_password=db_password,
         db_name=db_name, db_charset=db_charset,
         gpu_host=gpu_host, gpu_port=gpu_port, gpu_default=gpu_default,

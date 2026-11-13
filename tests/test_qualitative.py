@@ -19,7 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import esg_s11_scorer  # noqa: F401,E402  （触发 sys.path 注入 ESG_insight/app）
 from esg_s11_scorer import qualitative  # noqa: E402
 from esg_s11_scorer.llm import LLMError, parse_json  # noqa: E402
-from esg_s11_scorer.rubric import RUBRICS, rubric_hash  # noqa: E402
+from esg_s11_scorer.rubric import (BASELINE_EXCLUDED, RUBRICS,  # noqa: E402
+                                   baseline_groups, rubric_hash)
 from s11_text import Doc, Page  # noqa: E402
 
 
@@ -44,6 +45,33 @@ class TestRubricShape(unittest.TestCase):
     def test_hash_is_stable_and_content_sensitive(self):
         self.assertEqual(rubric_hash(), rubric_hash())
         self.assertEqual(len(rubric_hash()), 12)
+
+
+class TestBaselineVocabulary(unittest.TestCase):
+    """兜底词表冻结在 v1.4：召回词表可以继续扩，兜底基线不能跟着漂。
+
+    这条是给「加词」上的保险——2026-11-09 对账 GT 时实测：往 S1.1.1 加 ``child labour``
+    会让 02269/03692 的兜底档位从 50 跳到 100（人工举证判 50 / 15）。
+    """
+
+    V14_COUNTS = {"S1.1.1-C": 67, "S1.1.2-C": 66, "S1.1.3": 78,
+                  "S1.1.4": 63, "S1.1.5": 76}
+
+    def test_baseline_equals_v14(self):
+        for key, want in self.V14_COUNTS.items():
+            got = sum(len(ws) for _, ws in baseline_groups(RUBRICS[key]))
+            self.assertEqual(got, want, msg=f"{key} 兜底词表应为 v1.4 的 {want} 个词")
+
+    def test_every_excluded_word_exists_in_table(self):
+        """排除名单不能写错字：每个词都得真的在当前词表里。"""
+        for key, words in BASELINE_EXCLUDED.items():
+            have = {w for _, ws in RUBRICS[key].groups for w in ws}
+            self.assertTrue(words <= have, msg=f"{key} 排除了不存在的词：{sorted(words - have)}")
+
+    def test_baseline_is_subset_of_full(self):
+        for key, rub in RUBRICS.items():
+            full = {w for _, ws in rub.groups for w in ws}
+            self.assertTrue({w for _, ws in baseline_groups(rub) for w in ws} <= full)
 
 
 class TestRecall(unittest.TestCase):

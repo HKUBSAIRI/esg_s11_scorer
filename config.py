@@ -30,14 +30,14 @@ from dataclasses import dataclass, field
 
 from .settings import get_settings
 
-MODEL_VERSION = "s11-model-1.3"
+MODEL_VERSION = "s11-model-1.5"
 EXTRACT_VERSION = "extract-1.0"
 SCHEMA_VERSION = "1"
 
 # 管道各阶段的「规则版本」：指纹（缓存复用判据）用它们区分「哪一段变了」。
 # 只增不改：改了某段的实现就必须 +0.1，否则旧产物会被误判为仍有效。
 PARSE_VERSION = "parse-1.0"              # 页级文本的落地格式
-BENCH_VERSION = "bench-1.0"              # 分位算法
+BENCH_VERSION = "bench-1.1"              # 分位算法（1.1：分母只数该指标有值的家数）
 TABLE_VERSION = "tables-1"               # gold 表字段
 
 _SETTINGS = get_settings()
