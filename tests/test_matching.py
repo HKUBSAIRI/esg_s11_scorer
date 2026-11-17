@@ -98,5 +98,62 @@ class TestNoisepenalty(unittest.TestCase):
         self.assertEqual(ps[0].text, self.REAL)
 
 
+class TestGroupAwareOrder(unittest.TestCase):
+    """召回先按「计分组命中数」排序：不在 specs 里的组（T7 人权）不能靠词多霸榜。"""
+
+    HR = "We respect human rights and 人权 obligations across the group."
+    LEAVE = "员工依法享有年假。"
+
+    def _doc(self, *texts):
+        from s11_text import Doc, Page
+        return Doc(path="t.pdf", pages=[Page(no=i, text=t, cjk=0)
+                                        for i, t in enumerate(texts, start=1)])
+
+    def test_llm_path_drops_unscored_group(self):
+        from esg_s11_scorer.qualitative import recall
+        from esg_s11_scorer.rubric import RUBRICS
+        ps = recall(self._doc(self.HR, self.LEAVE), RUBRICS["S1.1.3"])
+        self.assertEqual([p.text for p in ps], [self.LEAVE])
+
+    def test_keyword_baseline_keeps_aux_words(self):
+        from esg_s11_scorer.qualitative import recall
+        from esg_s11_scorer.rubric import RUBRICS
+        ps = recall(self._doc(self.HR, self.LEAVE), RUBRICS["S1.1.3"],
+                    llm_path=False)
+        self.assertEqual(ps[0].text, self.HR)
+
+    def test_unscored_group_skipped_from_recall(self):
+        from esg_s11_scorer.qualitative import recall
+        from esg_s11_scorer.rubric import RUBRICS
+        self.assertFalse(any(g.startswith("T7")
+                             for g, _ in RUBRICS["S1.1.3"].recall_groups))
+        self.assertFalse(any(g.startswith("D0")
+                             for g, _ in RUBRICS["S1.1.5"].recall_groups))
+        ps = recall(self._doc(self.HR), RUBRICS["S1.1.3"])
+        self.assertEqual(ps, [], "只有人权词的段落不该进 LLM 召回")
+        ps = recall(self._doc(self.HR), RUBRICS["S1.1.3"], llm_path=False)
+        self.assertEqual(len(ps), 1, "keyword 基线仍要看到 T7 词")
+
+
+class TestRecallExtra(unittest.TestCase):
+    """S1.1.2 的通用薪酬词只进 LLM 召回，不能动 keyword 兜底的 350 词基线。"""
+
+    PAY = "The Group negotiated collective wage agreements with unions in 2025."
+
+    def _doc(self):
+        from s11_text import Doc, Page
+        return Doc(path="t.pdf", pages=[Page(no=1, text=self.PAY, cjk=0)])
+
+    def test_extra_words_reach_llm_recall(self):
+        from esg_s11_scorer.qualitative import recall
+        from esg_s11_scorer.rubric import RUBRICS
+        self.assertEqual(len(recall(self._doc(), RUBRICS["S1.1.2-C"])), 1)
+
+    def test_keyword_baseline_unchanged(self):
+        from esg_s11_scorer.qualitative import recall
+        from esg_s11_scorer.rubric import RUBRICS
+        self.assertEqual(recall(self._doc(), RUBRICS["S1.1.2-C"], llm_path=False), [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

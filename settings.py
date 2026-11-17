@@ -189,6 +189,14 @@ class Settings:
     llm_model: str = ""
     llm_api_key: str = ""
     llm_thinking: bool = False
+    # 混合检索的 Embedding 端点。默认复用 LLM 的 DashScope 兼容地址与密钥，
+    # 模型单独配置，避免把聊天模型名误传给 /embeddings。
+    embedding_base_url: str = ""
+    embedding_model: str = "text-embedding-v3"
+    embedding_api_key: str = ""
+    embedding_timeout: int = 90
+    embedding_retries: int = 2
+    embedding_batch_size: int = 10
     # 三路独立判档（ensemble.py，只采集不出分）的投票人名单；空 = 主模型三个温度
     ensemble_voters: str = ""
     # 外部资源：MySQL（备用，打分链路不读）与 GPU 服务器账号（同上）
@@ -233,6 +241,12 @@ class Settings:
         ("ESG_LLM_MODEL", "llm_model", "text"),
         ("ESG_LLM_THINKING", "llm_thinking", "text"),
         ("ESG_LLM_API_KEY", "llm_api_key", "secret"),
+        ("ESG_EMBEDDING_BASE_URL", "embedding_base_url", "text"),
+        ("ESG_EMBEDDING_MODEL", "embedding_model", "text"),
+        ("ESG_EMBEDDING_API_KEY", "embedding_api_key", "secret"),
+        ("ESG_EMBEDDING_TIMEOUT", "embedding_timeout", "text"),
+        ("ESG_EMBEDDING_RETRIES", "embedding_retries", "text"),
+        ("ESG_EMBEDDING_BATCH_SIZE", "embedding_batch_size", "text"),
         ("ESG_ENSEMBLE_VOTERS", "ensemble_voters", "text"),
         ("ESG_DB_HOST", "db_host", "text"),
         ("ESG_DB_PORT", "db_port", "text"),
@@ -451,6 +465,21 @@ def build(env_file: str | Path | None = None) -> Settings:
         warnings.append("配了 ESG_LLM_BASE_URL / ESG_LLM_MODEL 但缺 ESG_LLM_API_KEY，"
                         "定性判档将退回关键词兜底")
 
+    # 混合检索 Embedding：默认直接复用 LLM 的兼容端点和密钥，只单独指定模型。
+    # 这样现有 DashScope 配置无需复制密钥；换供应商时可完全独立配置。
+    raw_emb_base, src = lay.raw("ESG_EMBEDDING_BASE_URL")
+    embedding_base_url = raw_emb_base or llm_base_url
+    sources["ESG_EMBEDDING_BASE_URL"] = (
+        src if raw_emb_base else "默认（复用 ESG_LLM_BASE_URL）")
+    raw_emb_model, src = lay.raw("ESG_EMBEDDING_MODEL")
+    embedding_model = raw_emb_model or "text-embedding-v3"
+    sources["ESG_EMBEDDING_MODEL"] = (
+        src if raw_emb_model else "默认（text-embedding-v3）")
+    raw_emb_key, src = lay.raw("ESG_EMBEDDING_API_KEY")
+    embedding_api_key = raw_emb_key or llm_api_key
+    sources["ESG_EMBEDDING_API_KEY"] = (
+        src if raw_emb_key else "默认（复用 ESG_LLM_API_KEY）")
+
     # 三路独立判档（``ensemble.py``，只采集、不出分）：投票人名单，形如
     # ``qwen-plus@0.7,qwen-max@0.7``。留空 = 主模型 + 三个温度，不需要额外配置。
     ensemble_voters, src = lay.raw("ESG_ENSEMBLE_VOTERS")
@@ -476,6 +505,13 @@ def build(env_file: str | Path | None = None) -> Settings:
             warnings.append(f"{name}={raw!r} 不是整数，已回退 {default}")
             sources[name] = f"无效值，回退 {default}"
             return default
+
+    embedding_timeout = number("ESG_EMBEDDING_TIMEOUT", 90)
+    embedding_retries = number("ESG_EMBEDDING_RETRIES", 2)
+    embedding_batch_size = number("ESG_EMBEDDING_BATCH_SIZE", 10)
+    if embedding_batch_size < 1:
+        warnings.append("ESG_EMBEDDING_BATCH_SIZE 必须 >= 1，已回退 10")
+        embedding_batch_size = 10
 
     db_host = text("ESG_DB_HOST")
     db_port = number("ESG_DB_PORT", DEFAULT_DB_PORT)
@@ -513,6 +549,9 @@ def build(env_file: str | Path | None = None) -> Settings:
         alias_csv=alias_csv,
         llm_base_url=llm_base_url, llm_model=llm_model, llm_api_key=llm_api_key,
         llm_thinking=llm_thinking,
+        embedding_base_url=embedding_base_url, embedding_model=embedding_model,
+        embedding_api_key=embedding_api_key, embedding_timeout=embedding_timeout,
+        embedding_retries=embedding_retries, embedding_batch_size=embedding_batch_size,
         ensemble_voters=ensemble_voters,
         db_host=db_host, db_port=db_port, db_user=db_user, db_password=db_password,
         db_name=db_name, db_charset=db_charset,

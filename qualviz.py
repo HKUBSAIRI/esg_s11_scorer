@@ -47,6 +47,8 @@ def collect(views, verdicts_by_code: dict) -> list[dict]:
                 "model": "" if vd is None else vd.model,
                 "alias_hits": 0 if vd is None else vd.alias_hits,
                 "n_passages": 0 if vd is None else vd.n_passages,
+                "status": "" if vd is None else vd.status,
+                "basis": "" if vd is None else vd.basis,
                 "reason": "" if vd is None else vd.reason,
                 "missing": "" if vd is None else vd.missing,
                 "evidence": [] if vd is None else list(vd.evidence),
@@ -100,20 +102,22 @@ def write(rows: list[dict], out_path: str | Path, *, year: int, mode: str = "",
 
     # ---- 判档明细
     ws2 = wb.create_sheet("判档明细")
-    title(ws2, "逐项判档明细（理由与依据原文，复核看这张）", 11)
-    head(ws2, 2, ["代码", "公司", "评分点", "档位", "出处", "模型", "脱敏", "召回",
-                  "理由", "缺口", "依据原文（首条）"],
-         [8, 20, 26, 7, 12, 11, 7, 7, 46, 46, 60])
+    title(ws2, "逐项判档明细（理由与依据原文，复核看这张）", 13)
+    head(ws2, 2, ["代码", "公司", "评分点", "档位", "待复核", "出处", "模型", "证据层",
+                  "脱敏", "召回", "理由", "缺口", "依据原文（首条）"],
+         [8, 20, 26, 7, 8, 12, 11, 9, 7, 7, 46, 46, 60])
     r = 3
     for row in sorted(rows, key=lambda x: (x["code"], keys.index(x["key"]))):
         ev = row["evidence"][0] if row["evidence"] else ""
-        vals = [row["code"], row["name"], row["label"], row["tier"], row["source"],
-                row["model"], row["alias_hits"], row["n_passages"],
+        vals = [row["code"], row["name"], row["label"], row["tier"],
+                "待复核" if row["status"] == "review" else "",
+                row["source"], row["model"], row["basis"],
+                row["alias_hits"], row["n_passages"],
                 row["reason"], row["missing"], ev]
         for j, v in enumerate(vals, start=1):
             c = ws2.cell(row=r, column=j, value=v)
             c.border, c.font = BORDER, (F_BB if j == 4 else F_B)
-            c.alignment = LEF if j in (9, 10, 11) else CEN
+            c.alignment = LEF if j in (11, 12, 13) else CEN
         # 行高按「最长的那个折行列」算：只按理由算会让依据原文溢出到下一行
         lines = max(-(-len(row["reason"]) // 42), -(-len(row["missing"]) // 42),
                     -(-len(ev) // 52), 1)

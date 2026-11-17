@@ -13,12 +13,13 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import esg_s11_scorer  # noqa: F401,E402  （触发 sys.path 注入 ESG_insight/app）
 from esg_s11_scorer import qualitative  # noqa: E402
-from esg_s11_scorer.llm import LLMError, parse_json  # noqa: E402
+from esg_s11_scorer.llm import LLM, LLMError, parse_json  # noqa: E402
 from esg_s11_scorer.rubric import (BASELINE_EXCLUDED, RUBRICS,  # noqa: E402
                                    baseline_groups, rubric_hash)
 from s11_text import Doc, Page  # noqa: E402
@@ -155,7 +156,8 @@ class TestJsonParsing(unittest.TestCase):
 class TestVerdictRoundtrip(unittest.TestCase):
     def test_roundtrip(self):
         v = qualitative.Verdict(key="S1.1.5", tier=100, reason="r", evidence=["[p1] x"],
-                                source="llm", missing="", model="qwen-plus", n_passages=9)
+                                source="llm", missing="", model="qwen-plus", n_passages=9,
+                                basis="result")
         back = qualitative.Verdict.from_dict(v.to_dict())
         self.assertEqual(back.to_dict(), v.to_dict())
 
@@ -170,6 +172,147 @@ class TestPrompt(unittest.TestCase):
         self.assertIn("[1] p7", text)
         self.assertIn("JSON", text)
 
+    def test_prompt_lists_groups_and_path(self):
+        rub = RUBRICS["S1.1.5"]
+        text = qualitative._prompt(rub, [qualitative.Passage(1, 1, "x", 1)])
+        for gid in ("D1", "D10"):
+            self.assertIn(f"{gid} ", text)
+        self.assertIn("【100 分路径】", text)
+        self.assertIn("D7、D8、D9、D10", text)
+
+
+class TestPathGuard(unittest.TestCase):
+    """100 分路径复核：只降不升，降档必须标 review。"""
+
+    def _judge(self, key: str, obj: dict):
+        rub = RUBRICS[key]
+        ps = [qualitative.Passage(idx=1, page=1, text="公司已实施相关工作。", hits=1)]
+        with mock.patch.object(qualitative, "chat_json", return_value=obj):
+            return qualitative.judge_llm(rub, ps, LLM(model="fake"))
+
+    def test_full_path_keeps_100(self):
+        v = self._judge("S1.1.4", {"tier": 100, "groups": [
+            {"id": "W4", "hit": "yes"}, {"id": "W1", "hit": "yes"}]})
+        self.assertEqual((v.tier, v.status), (100, "ok"))
+
+    def test_100_without_required_group_downgrades(self):
+        v = self._judge("S1.1.4", {"tier": 100, "groups": [
+            {"id": "W4", "hit": "no"}, {"id": "W1", "hit": "yes"}]})
+        self.assertEqual((v.tier, v.status), (50, "review"))
+        self.assertIn("W4", v.missing_groups)
+
+    def test_partial_cannot_satisfy_require_all(self):
+        v = self._judge("S1.1.2-C", {"tier": 100, "groups": [
+            {"id": "P1", "hit": "partial"}, {"id": "P2", "hit": "yes"},
+            {"id": "P4", "hit": "yes"}]})
+        self.assertEqual((v.tier, v.status), (50, "review"))
+
+    def test_require_any_accepts_partial(self):
+        v = self._judge("S1.1.2-C", {"tier": 100, "groups": [
+            {"id": "P1", "hit": "yes"}, {"id": "P2", "hit": "yes"},
+            {"id": "P6", "hit": "partial"}]})
+        self.assertEqual((v.tier, v.status), (100, "ok"))
+
+    def test_invalid_tier_derived_from_groups(self):
+        v = self._judge("S1.1.2-C", {"tier": "待复核", "groups": [
+            {"id": "P1", "hit": "yes"}, {"id": "P2", "hit": "yes"},
+            {"id": "P3", "hit": "yes"}]})
+        self.assertEqual((v.tier, v.status), (100, "review"))
+
+    def test_event_needs_d7_to_d10(self):
+        v = self._judge("S1.1.5", {"tier": 100, "event": True, "groups": [
+            {"id": "D1", "hit": "yes"}, {"id": "D2", "hit": "yes"},
+            {"id": "D5", "hit": "yes"}, {"id": "D7", "hit": "yes"},
+            {"id": "D8", "hit": "yes"}]})
+        self.assertEqual((v.tier, v.status), (50, "review"))
+        self.assertIs(v.event, True)
+        self.assertIn("D9", v.missing_groups)
+
+    def test_no_event_skips_d8_to_d10(self):
+        v = self._judge("S1.1.5", {"tier": 100, "event": False, "groups": [
+            {"id": "D1", "hit": "yes"}, {"id": "D2", "hit": "yes"},
+            {"id": "D5", "hit": "yes"}]})
+        self.assertEqual((v.tier, v.status), (100, "ok"))
+
+    def test_underclaimed_100_is_flagged_not_raised(self):
+        v = self._judge("S1.1.4", {"tier": 50, "groups": [
+            {"id": "W4", "hit": "yes"}, {"id": "W1", "hit": "yes"}]})
+        self.assertEqual((v.tier, v.status), (50, "review"))
+        self.assertIn("保留原档", v.reason)
+
+
+class TestZeroFloor(unittest.TestCase):
+    """细则的 0 分档只覆盖「未识别」与「已核实违规」；只有声明/制度时该落 50。"""
+
+    def _judge(self, key_or_obj, obj: dict | None = None, key: str = "S1.1.2-C"):
+        if isinstance(key_or_obj, dict):
+            obj = key_or_obj
+        else:
+            key = key_or_obj
+        rub = RUBRICS[key]
+        ps = [qualitative.Passage(idx=1, page=1,
+                                  text="The Group discloses its remuneration policy.", hits=1)]
+        with mock.patch.object(qualitative, "chat_json", return_value=obj):
+            return qualitative.judge_llm(rub, ps, LLM(model="fake"))
+
+    def test_statement_basis_raises_zero_to_50(self):
+        v = self._judge({"tier": 0, "basis": "statement", "groups": [
+            {"id": "P1", "hit": "no"}, {"id": "P2", "hit": "no"}]})
+        self.assertEqual((v.tier, v.status), (50, "review"))
+        self.assertIn("50 分档", v.reason)
+        self.assertEqual(v.basis, "statement")
+
+    def test_none_basis_keeps_zero(self):
+        v = self._judge({"tier": 0, "basis": "none", "groups": [
+            {"id": "P1", "hit": "no"}, {"id": "P2", "hit": "no"}]})
+        self.assertEqual(v.tier, 0)
+
+    def test_violation_basis_keeps_zero(self):
+        v = self._judge({"tier": 0, "basis": "violation", "reason": "存在经核实的欠薪且未纠正",
+                         "groups": [{"id": "P1", "hit": "no"}, {"id": "P6", "hit": "no"}]})
+        self.assertEqual(v.tier, 0)
+
+    def test_unknown_basis_keeps_zero(self):
+        v = self._judge({"tier": 0, "basis": "未识别",
+                         "groups": [{"id": "P1", "hit": "no"}]})
+        self.assertEqual((v.tier, v.basis), (0, ""))
+
+    def test_single_int_evidence_is_tolerated(self):
+        rub = RUBRICS["S1.1.2-C"]
+        hits, ids = qualitative._parse_groups(
+            {"groups": [{"id": "P1", "hit": "yes", "evidence": 3}]}, rub)
+        self.assertEqual(hits, {"P1": "yes"})
+        self.assertEqual(ids, [3])
+
+    def test_single_int_top_level_evidence_is_tolerated(self):
+        v = self._judge({"tier": 50, "evidence": 2,
+                         "groups": [{"id": "P1", "hit": "yes"}]})
+        self.assertEqual(v.tier, 50)
+        self.assertTrue(v.evidence)
+
+    def test_missing_groups_marks_review(self):
+        v = self._judge("S1.1.4", {"tier": 50})
+        self.assertEqual((v.tier, v.status), (50, "review"))
+        self.assertIn("未经路径校验", v.reason)
+
+    def test_model_review_flag_passthrough(self):
+        v = self._judge("S1.1.4", {"tier": 50, "review": True,
+                                   "groups": [{"id": "W4", "hit": "yes"}]})
+        self.assertEqual(v.status, "review")
+
+    def test_floor_blocks_zero_when_gate_passed(self):
+        """S1.1.1：离职率已披露（gate 未触发）就不该再记「未识别相关内容」的 0。"""
+        v = self._judge("S1.1.1-C", {"tier": 0, "groups": [
+            {"id": g, "hit": "no"} for g in ("E0", "E1", "E2", "E3", "E4")]})
+        self.assertEqual((v.tier, v.status), (50, "review"))
+        self.assertIn("0 分档不适用", v.reason)
+
+    def test_floor_does_not_leak_to_other_items(self):
+        v = self._judge("S1.1.3", {"tier": 0, "groups": [
+            {"id": "T1", "hit": "no"}]})
+        self.assertEqual(v.tier, 0)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+

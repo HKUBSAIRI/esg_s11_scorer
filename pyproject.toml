@@ -16,6 +16,7 @@ readme = "README.md"
 # 可选：gold 表默认写 parquet；装不上时自动退回 JSONL（schema 一致）
 [project.optional-dependencies]
 tables = ["pyarrow>=14"]
+fast = ["numpy>=2.0"]
 
 # 说明：本包**不独立发布**，运行时还需要同级仓库 50-应用/ESG_insight/app
 # （复用其 s11_text / s11_judge / s11_elements）。路径由 settings.ESG_INSIGHT_APP 决定。

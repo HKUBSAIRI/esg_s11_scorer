@@ -40,6 +40,8 @@ def _verdict_note(v: Verdict) -> str:
         txt = v.reason
     else:
         txt = f"{src}：{v.tier} 分｜{v.reason}"
+    if v.status == "review":
+        txt += "｜待复核"
     return txt + (f"｜缺口：{v.missing}" if v.missing else "")
 
 
@@ -51,7 +53,8 @@ def _tiered(ind: str, v: Verdict) -> IndScore:
     """三档制指标：档位直接取判档结论。"""
     comps = [Component("", "判档依据", 0.0, None, _verdict_note(v), _verdict_evidence(v))]
     return IndScore(ind, IND_NAMES[ind], IND_WEIGHTS[ind], "tiered", comps,
-                    raw=int(v.tier), note=f"{v.tier} 分（{v.source}）")
+                    raw=int(v.tier),
+                    note=f"{v.tier} 分（{v.source}{'·待复核' if v.status == 'review' else ''}）")
 
 
 # ---------------------------------------------------------------- S1.1.1

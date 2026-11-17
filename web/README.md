@@ -6,6 +6,9 @@
 | `explorer.html` | `python -m esg_s11_scorer.explorer` 后访问 `http://127.0.0.1:8765` | 这句话凭什么归到这个指标、在第几页 |
 | `disputes.html` | `python -m esg_s11_scorer.disputes` 后访问 `http://127.0.0.1:8766` | 这家公司的每个指标，三家模型给的是不是一个档；全批哪些项有分歧 |
 
+另有 `achievements.html`：自包含的工作成果汇报页（成果、结果、方法、质量体检、工具、工程保障、边界），
+可通过 `http://127.0.0.1:8766/achievements.html` 打开，也可直接双击文件离线查看。
+
 三个页面都不算分：看板的数字来自 `data.js`（`board.py` 导出），段落浏览器只做解析与召回，
 分歧页只做「三票判档 + 总汇」，不写 `build/`、不碰交付目录。
 

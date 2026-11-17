@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>S1.1 工作成果 · 生物制药 ESG 披露评分模型</title>
+<style>
+:root{
+  --paper:#f6f3ec; --card:#fffdf8; --ink:#15211b; --body:#33413a; --muted:#6f7a73;
+  --line:#e3ddd0; --line2:#d5cdbd;
+  --teal:#0f5c55; --teal2:#12857a; --teal-soft:#e4f0ec;
+  --amber:#a9660b; --amber-soft:#fbefd8;
+  --red:#9f3a2c; --red-soft:#f8e4df;
+  --gold:#b78a1f;
+  --shadow:0 1px 0 rgba(21,33,27,.04),0 10px 30px rgba(21,33,27,.05);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--paper);color:var(--body);
+  font:15px/1.75 "Microsoft YaHei","PingFang SC","Segoe UI",system-ui,sans-serif;
+  font-feature-settings:"tnum";-webkit-font-smoothing:antialiased}
+h1,h2,h3{font-family:"Songti SC","SimSun",Georgia,serif;color:var(--ink);font-weight:700}
+a{color:var(--teal);text-decoration:none}
+code{font-family:"Cascadia Mono","Consolas",monospace;font-size:.88em;
+  background:#efeae0;border-radius:4px;padding:1px 5px;color:#3f4d45}
+.container{max-width:1180px;margin:0 auto;padding:0 26px}
+
+/* 顶部 */
+.hero{position:relative;overflow:hidden;color:#f7f3e8;
+  background:
+    radial-gradient(900px 420px at 82% -10%,rgba(32,120,105,.55),transparent 60%),
+    radial-gradient(700px 380px at 6% 110%,rgba(183,138,31,.22),transparent 60%),
+    #0e2422}
+.hero::after{content:"";position:absolute;inset:0;pointer-events:none;opacity:.16;
+  background-image:linear-gradient(rgba(255,255,255,.28) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(255,255,255,.28) 1px,transparent 1px);
+  background-size:34px 34px;mask-image:linear-gradient(to bottom,black,transparent 75%)}
+.hero .container{position:relative;z-index:1;padding-top:58px;padding-bottom:34px}
+.eyebrow{display:flex;align-items:center;gap:10px;font-size:12px;letter-spacing:.16em;
+  text-transform:uppercase;color:#b9d8d1}
+.eyebrow::before{content:"";width:34px;height:1px;background:#7fc0b2}
+.hero h1{margin:16px 0 10px;font-size:clamp(30px,4.4vw,54px);line-height:1.16;
+  color:#fbf7ec;letter-spacing:.01em}
+.hero .lead{max-width:760px;margin:0;color:#d7e3dd;font-size:clamp(15px,1.4vw,18px)}
+.hero-meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:22px}
+.chip{display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(255,255,255,.22);
+  background:rgba(255,255,255,.07);color:#e8f1ec;border-radius:999px;
+  padding:3px 11px;font-size:12px;white-space:nowrap}
+.chip b{color:#fff;font-weight:600}
+.kpis{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;
+  margin-top:34px}
+.kpi{border-top:1px solid rgba(255,255,255,.22);padding-top:10px;min-width:0}
+.kpi b{display:block;font-size:clamp(20px,2.2vw,28px);line-height:1.15;color:#fff;
+  font-family:"Songti SC","SimSun",Georgia,serif}
+.kpi span{display:block;font-size:11.5px;color:#a9c9c1;margin-top:2px;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+
+/* 导航 */
+.nav{position:sticky;top:0;z-index:30;background:rgba(246,243,236,.94);
+  border-bottom:1px solid var(--line);backdrop-filter:blur(10px)}
+.nav .container{display:flex;align-items:center;gap:18px;min-height:50px}
+.nav .brand{font-weight:700;color:var(--ink);font-size:13px;white-space:nowrap}
+.nav .links{display:flex;gap:4px;overflow:auto;scrollbar-width:none}
+.nav .links::-webkit-scrollbar{display:none}
+.nav a{font-size:12.5px;color:var(--muted);padding:5px 9px;border-radius:6px;white-space:nowrap}
+.nav a:hover{background:#ede8dc;color:var(--ink)}
+.nav a.on{background:var(--teal);color:#fff}
+.print-btn{margin-left:auto;border:1px solid var(--line2);background:#fff;color:var(--ink);
+  border-radius:7px;padding:5px 11px;font:inherit;font-size:12px;cursor:pointer;white-space:nowrap}
+.print-btn:hover{border-color:var(--teal);color:var(--teal)}
+
+/* 通用版式 */
+main{padding:10px 0 30px}
+section{padding:52px 0 8px;scroll-margin-top:64px}
+.sec-head{display:flex;align-items:baseline;gap:12px;margin-bottom:8px}
+.sec-no{font-size:12px;letter-spacing:.14em;color:var(--teal2);font-weight:700;
+  font-family:"Cascadia Mono","Consolas",monospace}
+.sec-head h2{margin:0;font-size:clamp(23px,2.6vw,32px);line-height:1.3}
+.sec-lead{max-width:820px;margin:0 0 24px;color:var(--muted);font-size:14.5px}
+.grid{display:grid;gap:14px}
+.g2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.g4{grid-template-columns:repeat(4,minmax(0,1fr))}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;
+  padding:18px 19px;box-shadow:var(--shadow)}
+.card h3{margin:0 0 6px;font-size:16px;line-height:1.4}
+.card p{margin:0;color:var(--body);font-size:13.5px}
+.card .small{color:var(--muted);font-size:12.5px;margin-top:8px}
+.tagline{display:inline-block;font-size:11px;letter-spacing:.08em;color:var(--teal);
+  background:var(--teal-soft);border-radius:999px;padding:2px 8px;margin-bottom:8px;
+  font-weight:700}
+.note{color:var(--muted);font-size:12.5px;margin:12px 0 0}
+.callout{border-left:3px solid var(--teal2);background:#eef6f3;border-radius:0 10px 10px 0;
+  padding:14px 17px;margin:18px 0 0;font-size:13.5px}
+.callout b{color:var(--teal)}
+.warn{border-left-color:var(--amber);background:var(--amber-soft)}
+.warn b{color:var(--amber)}
+
+/* 管道 */
+.pipe{display:flex;align-items:stretch;gap:6px;overflow:auto;padding-bottom:6px}
+.pipe-step{flex:1 0 128px;background:var(--card);border:1px solid var(--line);
+  border-radius:10px;padding:11px 11px 10px;position:relative}
+.pipe-step b{display:block;font-size:13px;color:var(--ink)}
+.pipe-step small{display:block;color:var(--muted);font-size:11px;line-height:1.45;
+  margin-top:2px;min-height:32px}
+.pipe-step em{display:block;font-style:normal;font-family:"Cascadia Mono","Consolas",monospace;
+  font-size:10px;color:var(--teal2);margin-top:7px;word-break:break-all}
+.pipe-step span{position:absolute;top:9px;right:10px;font-size:10px;color:#b9b2a2;
+  font-family:"Cascadia Mono","Consolas",monospace}
+.pipe .arrow{align-self:center;color:#b9b2a2;font-size:16px;flex:none}
+.pipe-step.hot{border-color:#a9cfc5;background:#f2faf7}
+
+/* 表格 */
+.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:11px;background:var(--card)}
+table{border-collapse:separate;border-spacing:0;width:100%;font-size:12.5px;
+  font-variant-numeric:tabular-nums}
+th,td{padding:8px 9px;border-bottom:1px solid #f0ece2;text-align:right;white-space:nowrap}
+th{position:sticky;top:0;background:#f3efe5;color:var(--ink);font-weight:700;
+  font-size:11.5px;z-index:2}
+th:first-child,td:first-child,th:nth-child(2),td:nth-child(2),
+th:nth-child(3),td:nth-child(3){text-align:left}
+tbody tr:hover td{background:#fbf8f1}
+tbody tr.top td{background:#f2faf7}
+td.name{font-weight:600;color:var(--ink)}
+td.total{min-width:150px}
+.scoreline{display:flex;align-items:center;gap:7px;justify-content:flex-end}
+.scoreline .bar{width:90px;height:5px;background:#ece7db;border-radius:4px;overflow:hidden}
+.scoreline .bar i{display:block;height:100%;background:linear-gradient(90deg,#12857a,#62b3a5)}
+.scoreline b{font-size:12.5px;color:var(--ink);min-width:38px;text-align:right}
+.scoreline span{font-size:11px;color:var(--muted);min-width:34px;text-align:right}
+
+/* 分歧 */
+.stat-strip{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-bottom:18px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.stat b{display:block;font-size:24px;line-height:1.1;color:var(--ink);
+  font-family:"Songti SC","SimSun",Georgia,serif}
+.stat span{display:block;font-size:11px;color:var(--muted);margin-top:3px;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.stat.sp b{color:var(--amber)}
+.stat.good b{color:var(--teal2)}
+.split-list{display:grid;gap:10px}
+.split-row{display:grid;grid-template-columns:210px 1fr;gap:14px;align-items:center;
+  padding:10px 12px;background:var(--card);border:1px solid var(--line);border-radius:9px}
+.split-name b{display:block;font-size:13px;color:var(--ink)}
+.split-name small{display:block;color:var(--muted);font-size:11px;line-height:1.4}
+.split-metrics{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.metric span{display:flex;justify-content:space-between;font-size:10.5px;color:var(--muted);
+  margin-bottom:3px}
+.metric span b{color:var(--ink);font-weight:700}
+.metric .bar{height:7px;background:#eee9dd;border-radius:5px;overflow:hidden}
+.metric .bar i{display:block;height:100%;background:#8ab7ac;border-radius:5px}
+.metric.impact .bar i{background:linear-gradient(90deg,#b78a1f,#d8b04f)}
+.typebar{display:flex;height:34px;border-radius:8px;overflow:hidden;border:1px solid var(--line);
+  background:#fff;margin:4px 0 8px}
+.typebar i{display:flex;align-items:center;justify-content:center;font-style:normal;
+  font-size:11.5px;font-weight:700;color:#fff;min-width:0}
+.typebar .mixed{background:#8a6a2f}
+.typebar .rubric{background:#9f3a2c}
+.typebar .evidence{background:#3f6f8f}
+.legend{display:flex;flex-wrap:wrap;gap:14px;font-size:11.5px;color:var(--muted)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{width:10px;height:10px;border-radius:3px;display:inline-block}
+.legend .mixed{background:#8a6a2f}.legend .rubric{background:#9f3a2c}
+.legend .evidence{background:#3f6f8f}
+.impact-line{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+.impact-pill{border:1px solid var(--line);background:#fff;border-radius:9px;padding:8px 11px;
+  font-size:12px;color:var(--muted)}
+.impact-pill b{color:var(--ink);font-size:15px;margin-right:4px}
+
+/* 工具 */
+.tool{display:flex;flex-direction:column;gap:8px}
+.tool .url{font-family:"Cascadia Mono","Consolas",monospace;font-size:11px;color:var(--teal2);
+  background:#eef6f3;border-radius:5px;padding:2px 6px;align-self:flex-start}
+.tool ul{margin:6px 0 0;padding-left:16px;color:var(--body);font-size:12.5px}
+.tool li{margin:2px 0}
+
+/* 边界 */
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.list{list-style:none;margin:0;padding:0}
+.list li{position:relative;padding:7px 0 7px 20px;border-bottom:1px dashed var(--line);
+  font-size:13px}
+.list li:last-child{border-bottom:0}
+.list li::before{content:"";position:absolute;left:2px;top:15px;width:7px;height:7px;
+  border-radius:50%;background:var(--teal2)}
+.list.limit li::before{background:var(--amber)}
+
+/* 页脚 */
+footer{border-top:1px solid var(--line);margin-top:46px;padding:20px 0 34px;
+  color:var(--muted);font-size:12px}
+footer .container{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+
+@media (max-width:980px){
+  .kpis{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .g4{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .g3{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .stat-strip{grid-template-columns:repeat(3,minmax(0,1fr))}
+}
+@media (max-width:700px){
+  .container{padding:0 16px}
+  .hero .container{padding-top:40px}
+  .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .g2,.g3,.two-col{grid-template-columns:1fr}
+  .g4{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .stat-strip{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .split-row{grid-template-columns:1fr}
+  .nav .brand{display:none}
+  section{padding-top:42px}
+}
+@media print{
+  body{background:#fff}
+  .nav,.print-btn{display:none!important}
+  .hero{background:#0e2422!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .card,.stat,.split-row,.table-wrap{box-shadow:none}
+  section{break-inside:avoid;padding-top:26px}
+  .pipe{overflow:visible;flex-wrap:wrap}
+  .pipe .arrow{display:none}
+}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="container">
+    <div class="eyebrow">HKU · ESG Research · S1.1</div>
+    <h1>生物制药 ESG 披露评分模型</h1>
+    <p class="lead">从 20 份年度报告出发，交付一套可复现、可追溯、可复核的「5 项指标分 + 分项证据 + 全批对标」工作流。</p>
+    <div class="hero-meta">
+      <span class="chip">报告年度 <b>FY2025</b></span>
+      <span class="chip">样本 <b>20 家</b></span>
+      <span class="chip">指标 <b>5 项</b></span>
+      <span class="chip">口径 <b>s11-model-1.5</b></span>
+      <span class="chip">判档 <b>LLM 盲评</b></span>
+    </div>
+    <div class="kpis">
+      <div class="kpi"><b>20</b><span>份报告全部解析成功</span></div>
+      <div class="kpi"><b>5</b><span>项指标、100 个判档格</span></div>
+      <div class="kpi"><b>21.9%</b><span>三模型判档分歧率</span></div>
+      <div class="kpi"><b>0.72</b><span>三票一致性 κ</span></div>
+      <div class="kpi"><b>197</b><span>条回归测试</span></div>
+      <div class="kpi"><b>3</b><span>个复核工具页面</span></div>
+    </div>
+  </div>
+</header>
+
+<nav class="nav" aria-label="章节导航">
+  <div class="container">
+    <span class="brand">S1.1 工作成果</span>
+    <div class="links">
+      <a href="#overview" class="on">概览</a>
+      <a href="#results">结果</a>
+      <a href="#method">方法</a>
+      <a href="#quality">质量体检</a>
+      <a href="#tools">复核工具</a>
+      <a href="#engineering">工程保障</a>
+      <a href="#limits">边界与下一步</a>
+    </div>
+    <button class="print-btn" onclick="window.print()">打印 / 导出 PDF</button>
+  </div>
+</nav>
+
+<main class="container">
+
+  <section id="overview">
+    <div class="sec-head"><span class="sec-no">01</span><h2>成果概览</h2></div>
+    <p class="sec-lead">不是一份「跑出分数的脚本」，而是一条从原始 PDF 到交付工作簿、再到复核工具的完整链路。每一段都有产物、有指纹、有回归测试。</p>
+    <div class="grid g4">
+      <div class="card">
+        <span class="tagline">PIPELINE</span>
+        <h3>一条可复现的打分管道</h3>
+        <p>解析、抽数、上期回退、定性判档、对标分位、记分、发布，七段解耦；改阈值只重算一段。</p>
+        <p class="small">产物落地在 <code>build/FY2025/</code>，可随时删除重算。</p>
+      </div>
+      <div class="card">
+        <span class="tagline">DELIVERABLES</span>
+        <h3>一批可评审的交付物</h3>
+        <p>批次汇总、20 份单家报告、得分构成图册、定性判档图册，以及人工兜底表。</p>
+        <p class="small">分数、分位、档位先写 gold 表，报告只渲染、不计算。</p>
+      </div>
+      <div class="card">
+        <span class="tagline">QUALITY</span>
+        <h3>一套判档质量体检</h3>
+        <p>三个模型独立判档，定位哪些「公司 × 指标」不稳定，并区分判据歧义与证据分歧。</p>
+        <p class="small">21 项分歧中，前 15 项覆盖 80% 的潜在分差。</p>
+      </div>
+      <div class="card">
+        <span class="tagline">ENGINEERING</span>
+        <h3>一组工程约束</h3>
+        <p>197 条回归测试、架构不变量、源码摘要缓存、配置与模型分离，保证「同一输入同一结果」。</p>
+        <p class="small">8 条批跑用例因样本从 5 家扩到 20 家保留为已知差异。</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="results">
+    <div class="sec-head"><span class="sec-no">02</span><h2>交付结果</h2></div>
+    <p class="sec-lead">FY2025 生物制药 20 家，LLM 判档口径。严格分把 N/A 按 0 计；归一分只按可观测权重折算，用来判断「这家在这一项上表现如何」。</p>
+    <div class="grid g4" style="margin-bottom:16px">
+      <div class="card"><h3>20 / 20</h3><p class="small">报告解析成功，无失败单位</p></div>
+      <div class="card"><h3>75.2</h3><p class="small">最高严格分 · 凯莱英（06821）</p></div>
+      <div class="card"><h3>45.8</h3><p class="small">严格分中位数 · 全批均值 46.5</p></div>
+      <div class="card"><h3>19.5</h3><p class="small">最低严格分 · 百济神州（06160）</p></div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>#</th><th>代码</th><th>公司</th>
+          <th>S1.1.1</th><th>S1.1.2</th><th>S1.1.3</th><th>S1.1.4</th><th>S1.1.5</th>
+          <th>严格分</th><th>归一分</th>
+        </tr></thead>
+        <tbody>
+          <tr class="top"><td>1</td><td>06821</td><td class="name">凯莱英</td><td>85.0</td><td>55.0</td><td>50</td><td>100</td><td>100</td><td class="total"><div class="scoreline"><div class="bar"><i style="width:75.2%"></i></div><b>75.2</b></div></td><td>82.3</td></tr>
+          <tr class="top"><td>2</td><td>02269</td><td class="name">药明生物</td><td>67.5</td><td>65.0</td><td>50</td><td>100</td><td>100</td><td class="total"><div class="scoreline"><div class="bar"><i style="width:73.9%"></i></div><b>73.9</b></div></td><td>73.9</td></tr>
+          <tr class="top"><td>3</td><td>01513</td><td class="name">丽珠医药</td><td>67.5</td><td>15.0</td><td>50</td><td>100</td><td>100</td><td class="total"><div class="scoreline"><div class="bar"><i style="width:58.9%"></i></div><b>58.9</b></div></td><td>69.4</td></tr>
+          <tr><td>4</td><td>03692</td><td class="name">翰森制药</td><td>42.5</td><td>35.0</td><td>50</td><td>100</td><td>100</td><td class="total"><div class="scoreline"><div class="bar"><i style="width:58.6%"></i></div><b>58.6</b></div></td><td>63.1</td></tr>
+          <tr><td>5</td><td>01548</td><td class="name">金斯瑞生物科技</td><td>55.0</td><td>15.0</td><td>50</td><td>100</td><td>100</td><td class="total"><div class="scoreline"><div class="bar"><i style="width:55.8%"></i></div><b>55.8</b></div></td><td>72.2</td></tr>
+          <tr><td>6</td><td>01801</td><td class="name">信达生物</td><td>50.0</td><td>15.0</td><td>50</td><td>100</td><td>100</td><td class="total"><div class="scoreline"><div class="bar"><i style="width:54.5%"></i></div><b>54.5</b></div></td><td>65.0</td></tr>
+          <tr><td>7</td><td>01177</td><td class="name">中国生物制药</td><td>40.0</td><td>15.0</td><td>50</td><td>100</td><td>100</td><td class="total"><div class="scoreline"><div class="bar"><i style="width:52.0%"></i></div><b>52.0</b></div></td><td>62.5</td></tr>
+          <tr><td>8</td><td>00512</td><td class="name">远大医药</td><td>32.5</td><td>15.0</td><td>50</td><td>100</td><td>100</td><td class="total"><div class="scoreline"><div class="bar"><i style="width:50.1%"></i></div><b>50.1</b></div></td><td>60.6</td></tr>
+          <tr><td>9</td><td>00867</td><td class="name">康哲药业</td><td>15.0</td><td>15.0</td><td>50</td><td>100</td><td>100</td><td class="total"><div class="scoreline"><div class="bar"><i style="width:45.8%"></i></div><b>45.8</b></div></td><td>57.9</td></tr>
+          <tr><td>10</td><td>03320</td><td class="name">华润医药</td><td>45.0</td><td>15.0</td><td>50</td><td>100</td><td>50</td><td class="total"><div class="scoreline"><div class="bar"><i style="width:45.8%"></i></div><b>45.8</b></div></td><td>61.1</td></tr>
+          <tr><td>11</td><td>03759</td><td class="name">康龙化成</td><td>15.0</td><td>15.0</td><td>50</td><td>100</td><td>100</td><td class="total"><div class="scoreline"><div class="bar"><i style="width:45.8%"></i></div><b>45.8</b></div></td><td>56.2</td></tr>
+          <tr><td>12</td><td>06185</td><td class="name">康希诺生物</td><td>55.0</td><td>0.0</td><td>50</td><td>100</td><td>50</td><td class="total"><div class="scoreline"><div class="bar"><i style="width:43.8%"></i></div><b>43.8</b></div></td><td>49.6</td></tr>
+          <tr><td>13</td><td>01093</td><td class="name">石药集团</td><td>15.0</td><td>0.0</td><td>50</td><td>100</td><td>100</td><td class="total"><div class="scoreline"><div class="bar"><i style="width:41.2%"></i></div><b>41.2</b></div></td><td>41.2</td></tr>
+          <tr><td>14</td><td>02096</td><td class="name">先声药业</td><td>25.0</td><td>15.0</td><td>50</td><td>100</td><td>50</td><td class="total"><div class="scoreline"><div class="bar"><i style="width:40.8%"></i></div><b>40.8</b></div></td><td>53.9</td></tr>
+          <tr><td>15</td><td>02196</td><td class="name">复星医药</td><td>35.0</td><td>0.0</td><td>50</td><td>100</td><td>50</td><td class="total"><div class="scoreline"><div class="bar"><i style="width:38.8%"></i></div><b>38.8</b></div></td><td>42.5</td></tr>
+          <tr><td>16</td><td>01530</td><td class="name">三生制药</td><td>15.0</td><td>15.0</td><td>50</td><td>100</td><td>50</td><td class="total"><div class="scoreline"><div class="bar"><i style="width:38.2%"></i></div><b>38.2</b></div></td><td>50.4</td></tr>
+          <tr><td>17</td><td>00013</td><td class="name">和黄医药</td><td>0.0</td><td>15.0</td><td>50</td><td>100</td><td>50</td><td class="total"><div class="scoreline"><div class="bar"><i style="width:34.5%"></i></div><b>34.5</b></div></td><td>45.0</td></tr>
+          <tr><td>18</td><td>03933</td><td class="name">联邦制药</td><td>0.0</td><td>15.0</td><td>50</td><td>100</td><td>50</td><td class="total"><div class="scoreline"><div class="bar"><i style="width:34.5%"></i></div><b>34.5</b></div></td><td>45.0</td></tr>
+          <tr><td>19</td><td>01681</td><td class="name">康臣药业</td><td>0.0</td><td>0.0</td><td>50</td><td>50</td><td>50</td><td class="total"><div class="scoreline"><div class="bar"><i style="width:22.5%"></i></div><b>22.5</b></div></td><td>22.5</td></tr>
+          <tr><td>20</td><td>06160</td><td class="name">百济神州</td><td>0.0</td><td>15.0</td><td>0</td><td>50</td><td>50</td><td class="total"><div class="scoreline"><div class="bar"><i style="width:19.5%"></i></div><b>19.5</b></div></td><td>30.0</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">口径：<code>--qualitative llm</code>；本表为 2026-11-09 交付的 <code>s11-model-1.4</code> 结果。当前代码口径为 <code>s11-model-1.5</code>（召回段数扩到 24、补英文同义词），下次重跑会更新。</p>
+  </section>
+
+  <section id="method">
+    <div class="sec-head"><span class="sec-no">03</span><h2>方法：七段管道</h2></div>
+    <p class="sec-lead">A/B 是批内相对分位，必须先拿到全批数据才能算某一家；因此「对标」是一道真实的年批次屏障，单份 PDF 无法自洽。</p>
+    <div class="pipe" aria-label="打分管道">
+      <div class="pipe-step"><span>01</span><b>parse</b><small>PDF → 页级文本</small><em>parse.json</em></div>
+      <i class="arrow">→</i>
+      <div class="pipe-step"><span>02</span><b>facts</b><small>数值抽取 + 人工兜底</small><em>facts.json</em></div>
+      <i class="arrow">→</i>
+      <div class="pipe-step"><span>03</span><b>prior</b><small>上期值三级回退</small><em>prior.json</em></div>
+      <i class="arrow">→</i>
+      <div class="pipe-step hot"><span>04</span><b>qualitative</b><small>LLM 盲评 / 关键词兜底</small><em>qualitative-*.json</em></div>
+      <i class="arrow">→</i>
+      <div class="pipe-step hot"><span>05</span><b>bench</b><small>全批分位 + 冻结快照</small><em>bench/FY2025/*.json</em></div>
+      <i class="arrow">→</i>
+      <div class="pipe-step"><span>06</span><b>score</b><small>0.4A + 0.3B + 0.3C</small><em>score.json</em></div>
+      <i class="arrow">→</i>
+      <div class="pipe-step"><span>07</span><b>report</b><small>gold 表 → 工作簿</small><em>*.xlsx</em></div>
+    </div>
+    <div class="grid g3" style="margin-top:16px">
+      <div class="card"><h3>每段落盘，指纹复用</h3><p>改阈值只重算 <code>score</code>；改抽取正则从 <code>facts</code> 起算；换 PDF 才回到 <code>parse</code>。第二次同批通常是秒级。</p></div>
+      <div class="card"><h3>池子必须显式</h3><p>对标池每次落成快照，并写 <code>manifest.csv</code> 记录谁进池、谁为什么没进；支持 <code>--freeze-bench</code> 与 <code>--bench-snapshot</code>。</p></div>
+      <div class="card"><h3>上期值不猜</h3><p>本报告附录 → 上一年已落地事实 → N/A，三级回退；不拿行业均值冒充上期。补数走 override 表并留痕。</p></div>
+      <div class="card"><h3>判档档位即分</h3><p>C 项与 S1.1.3/4/5 直接取 100/50/0，没有词法拼装层；缺判档就抛错，不静默给 0。</p></div>
+      <div class="card"><h3>报告只渲染</h3><p>分数、分位、档位先写 gold 表，报告拿到的是只读视图；「表里的数」和「报告里的数」不会各说一套。</p></div>
+      <div class="card"><h3>配置与模型分离</h3><p>路径、年度、输出走 <code>.env</code>；权重、阈值、判据只在 <code>config.py</code> / <code>rubric.py</code>。改口径必须升版本。</p></div>
+    </div>
+  </section>
+
+  <section id="quality">
+    <div class="sec-head"><span class="sec-no">04</span><h2>质量体检：三模型判档分歧</h2></div>
+    <p class="sec-lead">三个投票人独立判档，回答「哪些格子不稳、为什么不稳、先复核哪几格」。它不证明准确率，只把人工复核范围压缩。</p>
+    <div class="stat-strip">
+      <div class="stat"><b>96</b><span>可判项（有内容可判档）</span></div>
+      <div class="stat good"><b>75</b><span>三家一致，可直接用</span></div>
+      <div class="stat sp"><b>21</b><span>有分歧 · 21.9%</span></div>
+      <div class="stat"><b>4</b><span>闸门：未披露离职率 → 0</span></div>
+      <div class="stat"><b>0.72</b><span>三票一致性 κ</span></div>
+    </div>
+    <div class="split-list">
+      <div class="split-row">
+        <div class="split-name"><b>S1.1.5 · 平等机会与反骚扰</b><small>整项取档位，翻档动总分 7.5</small></div>
+        <div class="split-metrics">
+          <div class="metric"><span>分裂 <b>7 / 20</b></span><div class="bar"><i style="width:35%"></i></div></div>
+          <div class="metric impact"><span>潜在分差 <b>52.5</b></span><div class="bar"><i style="width:100%"></i></div></div>
+        </div>
+      </div>
+      <div class="split-row">
+        <div class="split-name"><b>S1.1.1-C · 就业终止保障</b><small>C 项占指标 30%，翻档动总分 3.75</small></div>
+        <div class="split-metrics">
+          <div class="metric"><span>分裂 <b>7 / 16</b></span><div class="bar"><i style="width:43.8%"></i></div></div>
+          <div class="metric impact"><span>潜在分差 <b>26.25</b></span><div class="bar"><i style="width:50%"></i></div></div>
+        </div>
+      </div>
+      <div class="split-row">
+        <div class="split-name"><b>S1.1.3 · 工作时间与休假</b><small>整项取档位，翻档动总分 7.5</small></div>
+        <div class="split-metrics">
+          <div class="metric"><span>分裂 <b>3 / 20</b></span><div class="bar"><i style="width:15%"></i></div></div>
+          <div class="metric impact"><span>潜在分差 <b>22.5</b></span><div class="bar"><i style="width:42.9%"></i></div></div>
+        </div>
+      </div>
+      <div class="split-row">
+        <div class="split-name"><b>S1.1.2-C · 薪酬支付保障</b><small>C 项占指标 30%，翻档动总分 4.5</small></div>
+        <div class="split-metrics">
+          <div class="metric"><span>分裂 <b>3 / 20</b></span><div class="bar"><i style="width:15%"></i></div></div>
+          <div class="metric impact"><span>潜在分差 <b>13.5</b></span><div class="bar"><i style="width:25.7%"></i></div></div>
+        </div>
+      </div>
+      <div class="split-row">
+        <div class="split-name"><b>S1.1.4 · 员工福利与支持</b><small>整项取档位，翻档动总分 7.5</small></div>
+        <div class="split-metrics">
+          <div class="metric"><span>分裂 <b>1 / 20</b></span><div class="bar"><i style="width:5%"></i></div></div>
+          <div class="metric impact"><span>潜在分差 <b>7.5</b></span><div class="bar"><i style="width:14.3%"></i></div></div>
+        </div>
+      </div>
+    </div>
+    <div class="impact-line">
+      <span class="impact-pill"><b>15</b>项分歧覆盖 80% 潜在分差</span>
+      <span class="impact-pill"><b>10</b>项交付档位与今日复现不一致</span>
+      <span class="impact-pill"><b>6</b>项交付档位不属于多数派</span>
+    </div>
+    <div style="margin-top:20px">
+      <h3 style="margin:0 0 10px;font-size:15px">分歧类型：决定下一步改哪里</h3>
+      <div class="typebar" role="img" aria-label="分歧类型：部分重叠 15 项，判据歧义 5 项，证据分歧 1 项">
+        <i class="mixed" style="width:71.4%">15 部分重叠</i>
+        <i class="rubric" style="width:23.8%">5 判据歧义</i>
+        <i class="evidence" style="width:4.8%">1</i>
+      </div>
+      <div class="legend">
+        <span><i class="rubric"></i>判据歧义：三票引同一段、档位不同 → 改 <code>rubric.py</code></span>
+        <span><i class="evidence"></i>证据分歧：三票引不同段 → 查召回 / 补词表</span>
+        <span><i class="mixed"></i>部分重叠：先按证据分歧处理</span>
+      </div>
+      <div class="callout"><b>关键结论：</b>分歧数最多的 <code>S1.1.1-C</code> 不是最该先看的；按「分裂率 × 改档对总分的影响」排序，<code>S1.1.5</code> 才是第一优先，其次是 <code>S1.1.1-C</code> 与 <code>S1.1.3</code>。</div>
+      <div class="callout warn"><b>注意：</b>3/3 一致是稳定性证据，不是准确性证据。三家共享同一个盲点时，照样会一致地判错；准确率必须用专家分单独校准。</div>
+    </div>
+  </section>
+
+  <section id="tools">
+    <div class="sec-head"><span class="sec-no">05</span><h2>三个复核工具</h2></div>
+    <p class="sec-lead">三个页面都不算分、不写交付目录，只回答三个不同的问题。它们让「分数」从黑箱变成可以逐格追问的对象。</p>
+    <div class="grid g3">
+      <div class="card tool">
+        <span class="url">index.html</span>
+        <h3>指标看板</h3>
+        <p>这家公司的这个指标取到什么值、分是怎么算出来的。</p>
+        <ul>
+          <li>左栏切换公司，点指标展开分项、缺口与依据原文</li>
+          <li>地址可直达 <code>#02269/S1.1.1</code></li>
+          <li>数字来自 <code>data.js</code>，页面不重算</li>
+        </ul>
+      </div>
+      <div class="card tool">
+        <span class="url">explorer.html</span>
+        <h3>段落浏览器</h3>
+        <p>这句话凭什么归到这个指标、在第几页。</p>
+        <ul>
+          <li>拖入 PDF，本机内存解析，不落盘、不上传</li>
+          <li>按命中词数 / 页码排序，点段落跳到 PDF 对应页</li>
+          <li>数值证据列出值、年度、页码、抽取方式与原句</li>
+        </ul>
+      </div>
+      <div class="card tool">
+        <span class="url">disputes.html</span>
+        <h3>判档分歧</h3>
+        <p>这家公司的每个指标，三个模型给的是不是一个档。</p>
+        <ul>
+          <li>单家判档 + 全批 20 × 5 矩阵</li>
+          <li>支持「仅有分歧」筛选与公司/代码搜索</li>
+          <li>点格子从右侧抽屉看三票档位、理由与引用</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section id="engineering">
+    <div class="sec-head"><span class="sec-no">06</span><h2>工程保障</h2></div>
+    <p class="sec-lead">研究型代码最容易坏在「第二次跑不一样」。这套实现把可复现性写进了指纹、测试和目录边界。</p>
+    <div class="grid g3">
+      <div class="card"><h3>197 条回归测试</h3><p>锁定 5 家 FY2025 的逐格分数、数值抽取、分位算法、报告结构与架构不变量。</p><p class="small">8 条批跑用例因样本从 5 家扩到 20 家保留为已知差异，不为了变绿去改口径锚点。</p></div>
+      <div class="card"><h3>源码摘要进指纹</h3><p>改了 <code>extract.py</code> 一定重算 facts，不需要谁记得升版本；「第二次 2 秒跑完」意味着真的没有东西需要重算。</p></div>
+      <div class="card"><h3>架构不变量</h3><p>渲染层不得 import 编排层；纯计算层不得碰 <code>store</code>/<code>tables</code>；<code>xlstyle</code> 必须是叶子。违反就测试挂掉。</p></div>
+      <div class="card"><h3>安全的试跑方式</h3><p><code>--dry-run</code> 只算分不写报告；<code>--force</code> 忽略缓存全段重算；<code>--build-dir</code>/<code>--out</code> 可指到临时目录。</p></div>
+      <div class="card"><h3>零新增依赖的页面</h3><p>三个复核页都是标准库 <code>http.server</code> + 原生 HTML/CSS/JS；离线可用，不需要前端构建链。</p></div>
+      <div class="card"><h3>配置可审计</h3><p><code>--show-config</code> 打印每个变量的生效值、来源与路径是否存在；年度与目录名不匹配会直接提示「疑似串档」。</p></div>
+    </div>
+  </section>
+
+  <section id="limits">
+    <div class="sec-head"><span class="sec-no">07</span><h2>边界与下一步</h2></div>
+    <p class="sec-lead">这份成果最适合回答「怎么算、算了什么、哪里不稳」，不适合单独回答「分数一定对」。边界写清楚，比多报一个漂亮数字更重要。</p>
+    <div class="two-col">
+      <div class="card">
+        <h3>现在不能声称的</h3>
+        <ul class="list limit">
+          <li>3/3 一致 ≠ 判档正确；三家可能共享同一个盲点。</li>
+          <li>三个投票人不独立：qwen-max / qwen-plus 同源，有效票数不到 3。</li>
+          <li>每票只跑一次，温度 0 仍有约 2% 翻档，部分分歧只是采样噪声。</li>
+          <li>校准样本仍小；keyword 口径下 S1.1.1 与 S1.1.5 的专家一致率只有 3/10。</li>
+          <li>交付工作簿仍是 1.4，代码已是 1.5；旧 workbook 不会自动跟着表更新。</li>
+          <li>11 家缺上期值，B 项按 N/A 处理；严格分因此偏低是口径事实，不是实现缺陷。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>下一步最值得做的</h3>
+        <ul class="list">
+          <li>把「潜在分差」和分歧类型直接放进分歧页，按影响排序生成前 15 项复核清单。</li>
+          <li>只对前 15 项让三个投票人各重跑 2 次，把稳定分歧和一次抖动分开。</li>
+          <li>5 项判据歧义逐条人工裁定，修订 <code>rubric.py</code> 并升 <code>RUBRIC_VERSION</code>。</li>
+          <li>证据分歧回查召回词表；缺决定句的补 <code>keywords.csv</code>。</li>
+          <li>扩大专家校准集，按一致性分层报告准确率，而不是只看 κ。</li>
+          <li>统一用 1.5 重跑 20 家，交付工作簿与代码口径对齐。</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="container">
+    <span>S1.1 生物制药 ESG 披露评分模型 · 工作成果汇报</span>
+    <span>数据截至 2026-11-12 · 交付口径 s11-model-1.4 · 代码口径 s11-model-1.5</span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  const links = [...document.querySelectorAll(".nav a[href^='#']")];
+  const map = new Map(links.map((a) => [a.getAttribute("href").slice(1), a]));
+  const obs = new IntersectionObserver((entries) => {
+    entries.forEach((e) => {
+      if (!e.isIntersecting) return;
+      links.forEach((a) => a.classList.remove("on"));
+      const a = map.get(e.target.id);
+      if (a) a.classList.add("on");
+    });
+  }, { rootMargin: "-45% 0px -50% 0px", threshold: 0 });
+  document.querySelectorAll("main section[id]").forEach((s) => obs.observe(s));
+})();
+</script>
+</body>
+</html>

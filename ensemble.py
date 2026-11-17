@@ -133,7 +133,9 @@ def ballot(doc, rubric, voter: Voter, passages: list, blinder,
         return {"voter": voter.name, "model": voter.llm.model,
                 "temperature": voter.llm.temperature, "tier": 0, "source": "gate",
                 "reason": f"触发 0 分前置条件：{rubric.gate}", "missing": "",
-                "pages": [], "alias_hits": 0, "n_passages": len(passages), "error": ""}
+                "pages": [], "alias_hits": 0, "n_passages": len(passages), "error": "",
+                "status": "ok", "groups": {}, "missing_groups": [], "event": None,
+                "basis": ""}
     t0 = time.perf_counter()
     try:
         v = qual_mod.judge_llm(rubric, passages, voter.llm, blinder)
@@ -151,6 +153,9 @@ def ballot(doc, rubric, voter: Voter, passages: list, blinder,
             # 两段不同的话当成同一段证据（一页里往往有 2–3 段被召回）。
             "evidence": [_norm(e) for e in v.evidence],
             "alias_hits": v.alias_hits, "n_passages": v.n_passages, "error": "",
+            "status": v.status, "groups": dict(v.groups),
+            "missing_groups": list(v.missing_groups), "event": v.event,
+            "basis": v.basis,
             "seconds": round(time.perf_counter() - t0, 1)}
 
 
@@ -558,7 +563,7 @@ def write_report(bundle: dict, *, out_dir: str | Path,
         "", "**这份表测的是稳定性，不是准确性。** 三家一致地判错时它照样打「3/3」。"
         "准确率要拿 `calibrate.py` 的专家分单独量。", "",
         f"**出分模型只有一支：`{bundle.get('prod_model') or '（未配置）'}`（`ESG_LLM_MODEL`）。**"
-        f"第一票就是它今天的复算；「交付档位」是它 2026-11-09 那次调用的结果；"
+        f"第一票就是它今天的复算；「交付档位」是 `qualitative-llm` 的现有产物，本次体检不重算它；"
         f"其余投票人只做体检，不写 `qualitative-llm`、不进 `打分结果/`。", "",
         "## 一、验收表", "",
         "| 项 | 实测 | 阈值 | 结论 |", "|---|---|---|---|",
@@ -567,9 +572,9 @@ def write_report(bundle: dict, *, out_dir: str | Path,
         f"| 调用失败率 | {error_rate:.1%}（{sumry['errors']}） | ≤{th['error_rate']:.0%} "
         f"| {'通过' if error_rate <= th['error_rate'] else '不通过'} |",
         f"| 第一票（今日模型）是少数派 | {sumry['t1_minority']} 项 | 描述性 | — |",
-        f"| 现行交付档位是少数派（旧口径） | {sumry['minority']} 项 | 描述性 | — |",
+        f"| 现行交付档位是少数派 | {sumry['minority']} 项 | 描述性 | — |",
         f"| 交付档位与今日复现不一致 | {sumry['drift']} 项 | 0 "
-        f"| {'通过' if not sumry['drift'] else '不通过：交付不是当前代码算的，先重跑'} |",
+        f"| {'通过' if not sumry['drift'] else '不通过：与交付产物不一致，先核对差异项'} |",
         "| 3/3 层准确率 − 全体准确率 | 待补 | ≥ +10pp | **未验**（需 GT） |",
         f"| Fleiss' κ（三票一致性） | {_kappa_txt(sumry.get('kappa'))[0]} | 0.4–0.8 "
         f"| {_kappa_txt(sumry.get('kappa'))[1]} |", "",
@@ -627,8 +632,8 @@ def write_report(bundle: dict, *, out_dir: str | Path,
            "4. 分裂率低不等于判得对：`S1.1.4` 这类「一致地高」的项分裂率只有 5%，"
            "但专家判 50——稳定性报告看不见它，必须靠 GT 校准。",
            f"5. 体检结果里 `交付档位与今日复现不一致 = {sumry['drift']} 项` 时，先别忙复核："
-           "说明交付的分数不是当前代码算的（判据/脱敏改过，产物 key 已失效），"
-           "要拿当前代码重跑一遍交付再谈。",
+           "可能是采样差异，也可能是产物 key 已失效（判据/脱敏改过）；"
+           "先看差异项，再决定是否重跑交付。",
            "5. 下一步：拿 10 家专家分跑 `calibrate.py`，按一致性分层算准确率，再决定要不要"
            "把三路判档写进交付流程。", ""]
 

@@ -73,7 +73,9 @@ class TestBuild(unittest.TestCase):
 
     KEYS = ("ESG_YEAR", "ESG_PDF_DIR", "ESG_OUT_DIR", "ESG_PRIOR_DIR", "ESG_BENCH",
             "ESG_BENCH_CSV", "ESG_OVERRIDE_CSV", "ESG_PROJECT_ROOT", "ESG_SAMPLE_PDF_DIR",
-            "ESG_VERDICTS", "ESG_REPORT_ROOT")
+            "ESG_VERDICTS", "ESG_REPORT_ROOT", "ESG_EMBEDDING_BASE_URL",
+            "ESG_EMBEDDING_MODEL", "ESG_EMBEDDING_API_KEY", "ESG_EMBEDDING_TIMEOUT",
+            "ESG_EMBEDDING_RETRIES", "ESG_EMBEDDING_BATCH_SIZE")
 
     def setUp(self):
         self.tmpdir = Path(__file__).resolve().parent / "_env_case"
@@ -144,6 +146,28 @@ class TestBuild(unittest.TestCase):
     def test_rows_cover_every_variable(self):
         s = self._build("")
         self.assertEqual([r[0] for r in s.rows()], list(S.iter_env_names()))
+
+    def test_embedding_reuses_llm_endpoint_and_key_by_default(self):
+        s = self._build(
+            "ESG_LLM_BASE_URL=https://example.test/v1\n"
+            "ESG_LLM_MODEL=chat-model\n"
+            "ESG_LLM_API_KEY=test-secret\n")
+        self.assertEqual(s.embedding_base_url, "https://example.test/v1")
+        self.assertEqual(s.embedding_model, "text-embedding-v3")
+        self.assertEqual(s.embedding_api_key, "test-secret")
+
+    def test_embedding_can_be_configured_independently(self):
+        s = self._build(
+            "ESG_LLM_BASE_URL=https://chat.test/v1\n"
+            "ESG_LLM_API_KEY=chat-secret\n"
+            "ESG_EMBEDDING_BASE_URL=https://embed.test/v1\n"
+            "ESG_EMBEDDING_MODEL=embed-model\n"
+            "ESG_EMBEDDING_API_KEY=embed-secret\n"
+            "ESG_EMBEDDING_BATCH_SIZE=4\n")
+        self.assertEqual(s.embedding_base_url, "https://embed.test/v1")
+        self.assertEqual(s.embedding_model, "embed-model")
+        self.assertEqual(s.embedding_api_key, "embed-secret")
+        self.assertEqual(s.embedding_batch_size, 4)
 
 
 class TestTemplateInSync(unittest.TestCase):
